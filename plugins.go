@@ -158,5 +158,9 @@ func NewPlugins() *InOutPlugins {
 		plugins.registerPlugin(NewKafkaInput, "", &Settings.InputKafkaConfig, &Settings.KafkaTLSConfig)
 	}
 
+	if len(Settings.InputElasticSearchConfig.Address) > 0 && Settings.InputElasticSearchConfig.Address[0] != "" {
+		plugins.registerPlugin(NewElasticsearchInput, "", &Settings.InputElasticSearchConfig)
+	}
+
 	return plugins
 }

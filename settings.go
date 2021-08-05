@@ -71,11 +71,15 @@ type AppSettings struct {
 
 	InputKafkaConfig  InputKafkaConfig
 	OutputKafkaConfig OutputKafkaConfig
-	KafkaTLSConfig    KafkaTLSConfig
+
+	InputElasticSearchConfig InputElasticSearchConfig
+
+	KafkaTLSConfig KafkaTLSConfig
 }
 
 // Settings holds Gor configuration
 var Settings AppSettings
+var fromDate, toDate string
 
 func usage() {
 	fmt.Printf("Gor is a simple http traffic replication tool written in Go. Its main goal is to replay traffic from production servers to staging and dev environments.\nProject page: https://github.com/buger/gor\nAuthor: <Leonid Bugaev> leonsbox@gmail.com\nCurrent Version: v%s\n\n", VERSION)
@@ -207,6 +211,13 @@ func init() {
 	flag.Var(&Settings.ModifierConfig.HeaderHashFilters, "http-header-limiter", "Takes a fraction of requests, consistently taking or rejecting a request based on the FNV32-1A hash of a specific header:\n\t gor --input-raw :8080 --output-http staging.com --http-header-limiter user-id:25%")
 	flag.Var(&Settings.ModifierConfig.ParamHashFilters, "http-param-limiter", "Takes a fraction of requests, consistently taking or rejecting a request based on the FNV32-1A hash of a specific GET param:\n\t gor --input-raw :8080 --output-http staging.com --http-param-limiter user_id:25%")
 
+	//knowre elasticsearch
+	flag.Var(&Settings.InputElasticSearchConfig.Address, "input-elasticsearch-address", "input es address")
+	flag.StringVar(&Settings.InputElasticSearchConfig.Index, "input-elasticsearch-index", "", "input es index")
+	flag.StringVar(&fromDate, "input-elasticsearch-fromDate", "", "2021-08-01T00:00")
+	flag.StringVar(&toDate, "input-elasticsearch-toDate", "", "2021-08-02T00:05")
+	flag.StringVar(&Settings.InputElasticSearchConfig.Match, "input-elasticsearch-match", "", "Applies to the @log_group field.")
+
 	// default values, using for tests
 	Settings.OutputFileConfig.SizeLimit = 33554432
 	Settings.OutputFileConfig.OutputFileMaxSize = 1099511627776
@@ -223,6 +234,28 @@ func checkSettings() {
 	}
 	if Settings.CopyBufferSize < 1 {
 		Settings.CopyBufferSize.Set("5mb")
+	}
+
+	layout := "2006-01-02T15:04"
+
+	if fromDate == "" && toDate == "" {
+		//pass
+	} else if fromDate != "" && toDate != "" {
+		f1, f1Err := time.Parse(layout, fromDate)
+		if f1Err != nil {
+			fmt.Errorf("fromDate parse error : %s\n", f1Err)
+			os.Exit(1)
+		}
+		f2, f2Err := time.Parse(layout, toDate)
+		if f2Err != nil {
+			fmt.Errorf("toDate parse error : %s\n", f2Err)
+			os.Exit(1)
+		}
+		Settings.InputElasticSearchConfig.FromDate = f1
+		Settings.InputElasticSearchConfig.ToDate = f2
+	} else {
+		fmt.Errorf("fromDate, toDate both should be set up\n")
+		os.Exit(1)
 	}
 }
 
