@@ -9,11 +9,19 @@ import (
 	elasticsearch7 "github.com/elastic/go-elasticsearch/v7"
 	"log"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 )
 
+func Empty(s string) bool {
+	if s == "{}" || len(s) == 0 {
+		return true
+	}
+
+	return false
+}
 func UnmarshalServerLogCookie(data []byte) (ServerLogCookie, error) {
 	var r ServerLogCookie
 	err := json.Unmarshal(data, &r)
@@ -30,6 +38,15 @@ type ServerLogCookie struct {
 
 type Cookie struct {
 	ConnectSid string `json:"connect.sid"`
+}
+
+func (c Cookie) String() string {
+	t := reflect.TypeOf(Cookie{})
+	key, _ := t.FieldByName("ConnectSid")
+	if len(c.ConnectSid) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s=%s", key.Tag.Get("json"), c.ConnectSid)
 }
 
 func UnmarshalElasticsearchDocument(data []byte) (ElasticsearchDocument, error) {
@@ -261,8 +278,8 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			},
 		}
 
-		b, _ := json.Marshal(body)
-		log.Println(string(b))
+		dslQuery, _ := json.Marshal(body)
+		log.Println(string(dslQuery))
 
 		if err = json.NewEncoder(&buf).Encode(body); err != nil {
 			log.Fatalf("Error encoding query : %s", err)
@@ -345,17 +362,14 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			}
 
 			// Extract the scrollID from response
-			//
 			scrollID = r["_scroll_id"].(string)
 
 			// Extract the search results
-			//
 			hits := r["hits"].(map[string]interface{})["hits"].([]interface{})
 			documents += len(hits)
 			subDocuments += len(hits)
 
 			// Break out of the loop when there are no results
-			//
 			if len(hits) < 1 {
 				log.Println("Finished scrolling. SubDocuments ", subDocuments)
 				break
@@ -389,6 +403,8 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 	}
 
 	log.Println("Total : ", documents)
+	time.Sleep(time.Second * 30)
+	close(messages)
 
 }
 
@@ -399,6 +415,7 @@ func limiter(ems *ElasticsearchMessage, lastTime *int64) {
 		*lastTime = timestamp
 		_ = diff
 
+		//배속을 조절할 수 있음
 		//if i.speedFactor != 1 {
 		//	diff = int64(float64(diff) / i.speedFactor)
 		//}
@@ -411,7 +428,6 @@ func limiter(ems *ElasticsearchMessage, lastTime *int64) {
 
 func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, error) {
 	const layout = "2006-01-02T15:04:05.000Z"
-	var cookie string
 
 	serverLog := doc.Source.KnowreDaekyo.ServerLog
 	timestamp := doc.Source.Timestamp
@@ -420,19 +436,18 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 	host := strings.Split(serverLog.Router, ":")[0]
 	method := serverLog.Method
 	body := serverLog.Body
-	auth := serverLog.Token
+	//auth := serverLog.Token
 	accessToken := serverLog.AccessToken
 	appFlavor := serverLog.AppFlavor
+	cookie := serverLog.Cookie
 
-	logCookie, logCookieErr := UnmarshalServerLogCookie([]byte(serverLog.Cookie))
-	if logCookieErr != nil {
-		//log.Fatal(logCookieErr)
-		cookie = serverLog.Cookie
-	} else {
-		cookie = logCookie.Cookie.ConnectSid
+	if len(serverLog.Cookie) > 0 {
+		c, _ := UnmarshalServerLogCookie([]byte(serverLog.Cookie))
+		cookie = c.Cookie.String()
 	}
 
-	if body == "{}" {
+	//cehck empty string
+	if Empty(body) {
 		body = ""
 	}
 
@@ -440,19 +455,19 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 		"Content-Type": "application/json; charset=utf-8",
 		"Host":         host,
 	}
-	if len(cookie) > 0 {
+	if !Empty(cookie) {
 		headers["Cookie"] = cookie
 	}
-	if len(body) > 0 {
+	if !Empty(body) {
 		headers["Content-Length"] = fmt.Sprintf("%d", len(body))
 	}
-	if len(auth) > 0 {
-		headers["Authorization"] = auth
-	}
-	if len(accessToken) > 0 {
+	//if len(auth) > 0 {
+	//	headers["Authorization"] = auth
+	//}
+	if !Empty(accessToken) {
 		headers["x-access-token"] = accessToken
 	}
-	if len(appFlavor) > 0 {
+	if !Empty(appFlavor) {
 		headers["x-app-flavor"] = appFlavor
 	}
 
