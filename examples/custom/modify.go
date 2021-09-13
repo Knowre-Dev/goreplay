@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/buger/goreplay/proto"
 	"github.com/buger/jsonparser"
@@ -38,14 +39,14 @@ var (
 )
 
 // requestID -> originalToken
-var originalTokens map[string][]byte
+var originalTokens *TTLMap
 
 // originalToken -> replayedToken
-var xaccessToken map[string][]byte
+var xaccessToken *TTLMap
 
 func main() {
-	originalTokens = make(map[string][]byte)
-	xaccessToken = make(map[string][]byte)
+	originalTokens = NewTTLMap(3600)
+	xaccessToken = NewTTLMap(3600)
 
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -63,7 +64,8 @@ func process(buf []byte) {
 	//  1 - Request
 	//  2 - Response
 	//  3 - ReplayedResponse
-	if buf == nil || len(buf) > 1 {
+
+	if buf == nil || len(buf) < 1 {
 		return
 	}
 
@@ -93,8 +95,8 @@ func process(buf []byte) {
 
 			account, err := extractUserID(oldXToken)
 			if err == nil {
-				if xToken, ok := xaccessToken[account]; ok {
-					payload = proto.SetHeader(payload, []byte(XAccessToken), xToken)
+				if xToken, ok := xaccessToken.Get(account); ok {
+					payload = proto.SetHeader(payload, []byte(XAccessToken), []byte(xToken))
 					buf = append(buf[:metaSize], payload...)
 
 				}
@@ -110,7 +112,7 @@ func process(buf []byte) {
 
 			account, err := extractUserID([]byte(sid))
 			if err == nil {
-				if cookie, ok := originalTokens[account]; ok {
+				if cookie, ok := originalTokens.Get(account); ok {
 					cMap.Parse(string(cookie))
 					//Debug(cMap.String())
 					payload = proto.SetHeader(payload, []byte(COOKIE), []byte(cMap.String()))
@@ -134,9 +136,10 @@ func process(buf []byte) {
 
 		} else {
 			if status > 400 {
+				_ = reqID
 				//status code가 에러인 애는 리스폰스를 저장한다.
-				Debug(reqID)
-
+				//Debug(reqID)
+				//
 				//f, fErr := os.OpenFile(fmt.Sprintf("./err_%s.data", reqID), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 				//
 				//if fErr != nil {
@@ -158,14 +161,14 @@ func process(buf []byte) {
 					return
 				}
 				//Debug(userID, " - ", string(cookie))
-				originalTokens[userID] = cookie
+				originalTokens.Put(userID, string(cookie))
 			}
 		}
 
 		//response의 body에서 accessToken 추출
 		xaccessTokenValue, xaccount, xerr := extractUserIDFromBody(body, extractUserID, XAccessTokens...)
 		if xerr == nil {
-			xaccessToken[xaccount] = []byte(xaccessTokenValue)
+			xaccessToken.Put(xaccount, xaccessTokenValue)
 		}
 
 	}
@@ -187,6 +190,8 @@ func extractUserID(token []byte) (string, error) {
 				account = fmt.Sprintf("%d", int(m["user_id"].(float64)))
 				return account, nil
 			}
+
+			return "", errors.New("not found ID")
 		}
 
 	}
