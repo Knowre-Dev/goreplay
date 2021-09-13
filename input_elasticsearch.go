@@ -15,6 +15,7 @@ import (
 	"time"
 )
 
+//Empty 문자열이 {} 이거나 길이가 0이면 참을 반환한다.
 func Empty(s string) bool {
 	if s == "{}" || len(s) == 0 {
 		return true
@@ -82,7 +83,7 @@ type Source struct {
 	KafkaPartition     string       `json:"kafka.partition"`
 	KafkaTimestamp     string       `json:"kafka.timestamp"`
 	KafkaTopic         string       `json:"kafka.topic"`
-	KnowreDaekyo       KnowreDaekyo `json:"knowre-daekyo"`
+	KnowreDaekyo       KnowreDaekyo `json:"knowre-daekyo"` //@message가 파싱된게 들어있다.
 	LogType            string       `json:"logType"`
 }
 
@@ -325,6 +326,9 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 		if len(hits) > 0 {
 			//log.Println("Batch   ", batchNum)
 			//log.Println("ScrollID", scrollID)
+
+			log.Printf("0-Batch %d, ScrollID %s  message_len %d\n", batchNum, scrollID, len(messages))
+
 			var e []byte
 			var ems *ElasticsearchMessage
 			for _, hit := range resJson["hits"].(map[string]interface{})["hits"].([]interface{}) {
@@ -358,6 +362,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 
 			var r map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+				res.Body.Close()
 				log.Fatalf("Error parsing the response body: %s", err)
 			}
 
@@ -372,10 +377,11 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			// Break out of the loop when there are no results
 			if len(hits) < 1 {
 				log.Println("Finished scrolling. SubDocuments ", subDocuments)
+				res.Body.Close()
 				break
 			} else {
-				//log.Println("Batch   ", batchNum)
-				//log.Println("ScrollID", scrollID)
+				log.Printf("1-Batch %d, ScrollID %s  message_len %d\n", batchNum, scrollID, len(messages))
+
 				var e []byte
 				var ems *ElasticsearchMessage
 				for _, hit := range resJson["hits"].(map[string]interface{})["hits"].([]interface{}) {
@@ -385,6 +391,15 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 					if err != nil {
 						log.Fatalf("json marshal err : %s\n", err)
 					}
+
+					//f, ferr := ioutil.TempFile("./tmp", "gor")
+					//if ferr != nil {
+					//	panic(ferr)
+					//}
+					//
+					//bytes.NewReader(e).WriteTo(f)
+					//f.Close()
+
 					doc, uErr := UnmarshalElasticsearchDocument(e)
 					if uErr != nil {
 						log.Fatalf("document decode err : %s\n", uErr)
@@ -396,7 +411,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 				}
 				log.Println(strings.Repeat("-", 80))
 			}
-
+			res.Body.Close()
 		}
 		res.Body.Close()
 
@@ -473,6 +488,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 
 	logTimestamp, terr := time.Parse(layout, timestamp)
 	if terr != nil {
+		log.Fatal(terr)
 		return nil, terr
 	}
 	ems := &ElasticsearchMessage{
