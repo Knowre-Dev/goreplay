@@ -24,6 +24,7 @@ import (
 	"github.com/buger/goreplay/proto"
 	"github.com/buger/jsonparser"
 	"github.com/golang-jwt/jwt"
+	"log"
 	"os"
 	"strconv"
 )
@@ -45,13 +46,18 @@ var originalTokens *TTLMap
 var xaccessToken *TTLMap
 
 func main() {
+	run(bufio.NewScanner(os.Stdin))
+}
+
+func run(scanner *bufio.Scanner) {
 	originalTokens = NewTTLMap(3600)
 	xaccessToken = NewTTLMap(3600)
 
-	scanner := bufio.NewScanner(os.Stdin)
+	//scanner := bufio.NewScanner(os.Stdin)
 
 	for scanner.Scan() {
 		encoded := scanner.Bytes()
+		//log.Println(string(encoded[:1534]))
 		buf := make([]byte, len(encoded)/2)
 		hex.Decode(buf, encoded)
 
@@ -92,9 +98,14 @@ func process(buf []byte) {
 		//refresh x-access-token
 		{
 			oldXToken := proto.Header(payload, []byte(XAccessToken))
+			if len(oldXToken) > 0 {
+				//Debug(string(oldXToken))
+			}
 
 			account, err := extractUserID(oldXToken)
-			if err == nil {
+			if err != nil {
+				log.Println(err)
+			} else {
 				if xToken, ok := xaccessToken.Get(account); ok {
 					payload = proto.SetHeader(payload, []byte(XAccessToken), []byte(xToken))
 					buf = append(buf[:metaSize], payload...)
@@ -168,6 +179,7 @@ func process(buf []byte) {
 		//response의 body에서 accessToken 추출
 		xaccessTokenValue, xaccount, xerr := extractUserIDFromBody(body, extractUserID, XAccessTokens...)
 		if xerr == nil {
+			//Debug(xaccount, " - ", xaccessTokenValue)
 			xaccessToken.Put(xaccount, xaccessTokenValue)
 		}
 
@@ -177,8 +189,7 @@ func process(buf []byte) {
 func extractUserID(token []byte) (string, error) {
 	var account string
 	tokenStr := string(token)
-	t, err := jwt.Parse(tokenStr, nil)
-	if t != nil {
+	if t, _ := jwt.Parse(tokenStr, nil); t != nil {
 		m := t.Claims.(jwt.MapClaims)
 		if m != nil {
 			if m["userID"] != nil {
@@ -193,9 +204,8 @@ func extractUserID(token []byte) (string, error) {
 
 			return "", errors.New("not found ID")
 		}
-
 	}
-	return account, err
+	return account, errors.New("not found")
 }
 
 type Function func([]byte) (string, error)
