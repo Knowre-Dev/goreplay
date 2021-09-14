@@ -60,6 +60,7 @@ func (r *ElasticsearchDocument) Marshal() ([]byte, error) {
 	return json.Marshal(r)
 }
 
+//ES의 document구조 파싱을 위함
 type ElasticsearchDocument struct {
 	ID     string      `json:"_id"`
 	Index  string      `json:"_index"`
@@ -162,7 +163,7 @@ func NewElasticsearchInput(address string, config *InputElasticSearchConfig) *El
 
 	e := &ElasticsearchInput{
 		config:   config,
-		messages: make(chan *ElasticsearchMessage, 256),
+		messages: make(chan *ElasticsearchMessage),
 		quit:     make(chan struct{}),
 	}
 
@@ -186,7 +187,7 @@ func (e *ElasticsearchInput) PluginRead() (*Message, error) {
 
 	msg.Data, err = message.Dump()
 	if err != nil {
-		Debug(1, "[ELASTICSEARCH] failed to decode: ", err)
+		log.Fatal(1, "[ELASTICSEARCH] failed to decode: ", err)
 		return nil, err
 	}
 
@@ -341,6 +342,9 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 					log.Fatalf("document decode err : %s\n", uErr)
 				}
 				ems, err = NewElasticsearchMessage(doc)
+				if err != nil {
+					log.Fatal(err)
+				}
 
 				limiter(ems, &lastTime)
 
@@ -405,6 +409,9 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 						log.Fatalf("document decode err : %s\n", uErr)
 					}
 					ems, err = NewElasticsearchMessage(doc)
+					if err != nil {
+						log.Fatal(err)
+					}
 					limiter(ems, &lastTime)
 
 					messages <- ems
@@ -418,9 +425,6 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 	}
 
 	log.Println("Total : ", documents)
-	time.Sleep(time.Second * 30)
-	close(messages)
-
 }
 
 func limiter(ems *ElasticsearchMessage, lastTime *int64) {
@@ -488,7 +492,6 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 
 	logTimestamp, terr := time.Parse(layout, timestamp)
 	if terr != nil {
-		log.Fatal(terr)
 		return nil, terr
 	}
 	ems := &ElasticsearchMessage{
