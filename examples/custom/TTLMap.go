@@ -38,10 +38,13 @@ func (m *TTLMap) Len() int {
 func (m *TTLMap) Put(k string, v string) {
 	m.Lock()
 	it, ok := m.m[k]
-	if !ok {
-		it = &item{value: v}
-		m.m[k] = it
+	if ok {
+		m.m[k] = nil
 	}
+
+	it = &item{value: v}
+	m.m[k] = it
+
 	it.lastAccess = time.Now().Unix()
 	m.Unlock()
 }
