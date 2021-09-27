@@ -8,10 +8,13 @@ import (
 )
 
 func TestTTLMap(t *testing.T) {
-	m := NewTTLMap(1)
+	appConfig := AppConfig{
+		MaxTTL: 10,
+	}
+	m := NewTTLMap(appConfig)
 	for i := 0; i < 10000; i++ {
 		k, v := fmt.Sprint("key", i), fmt.Sprint("value", i)
-		m.Put(k, v)
+		m.Set(k, v)
 	}
 	assert.Equal(t, 10000, m.Len())
 

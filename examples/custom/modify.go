@@ -23,8 +23,8 @@ import (
 	"fmt"
 	"github.com/buger/goreplay/proto"
 	"github.com/buger/jsonparser"
+	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt"
-	"log"
 	"os"
 	"strconv"
 )
@@ -40,18 +40,29 @@ var (
 )
 
 // requestID -> originalToken
-var originalTokens *TTLMap
+var originalTokens *RedisMap
 
 // originalToken -> replayedToken
-var xaccessToken *TTLMap
+var xaccessToken *RedisMap
 
 func main() {
 	run(bufio.NewScanner(os.Stdin))
 }
 
 func run(scanner *bufio.Scanner) {
-	originalTokens = NewTTLMap(3600)
-	xaccessToken = NewTTLMap(3600)
+	redisAddr := os.Getenv("GOR_REDIS_ADDR")
+	conn := redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: "",
+		DB:       0,
+	})
+	appConfig := AppConfig{
+		MaxTTL: 3600,
+		Conn:   conn,
+	}
+
+	originalTokens = NewRedisMap(appConfig, "cookie")
+	xaccessToken = NewRedisMap(appConfig, "xaccessToken")
 
 	//scanner := bufio.NewScanner(os.Stdin)
 
@@ -97,6 +108,14 @@ func process(buf []byte) {
 		//ES에서 가져온 request
 		//refresh x-access-token
 		{
+			status, err := strconv.Atoi(string(proto.Status(payload)))
+			if err != nil {
+
+			} else {
+				if status >= 400 {
+					return
+				}
+			}
 			oldXToken := proto.Header(payload, []byte(XAccessToken))
 			if len(oldXToken) > 0 {
 				//Debug(string(oldXToken))
@@ -104,7 +123,7 @@ func process(buf []byte) {
 
 			account, err := extractUserID(oldXToken)
 			if err != nil {
-				log.Println(err)
+				//log.Println(err)
 			} else {
 				if xToken, ok := xaccessToken.Get(account); ok {
 					payload = proto.SetHeader(payload, []byte(XAccessToken), []byte(xToken))
@@ -146,7 +165,7 @@ func process(buf []byte) {
 		if err != nil {
 
 		} else {
-			if status > 400 {
+			if status >= 400 {
 				_ = reqID
 				//status code가 에러인 애는 리스폰스를 저장한다.
 				//Debug(reqID)
@@ -172,7 +191,7 @@ func process(buf []byte) {
 					return
 				}
 				//Debug(userID, " - ", string(cookie))
-				originalTokens.Put(userID, string(cookie))
+				originalTokens.Set(userID, string(cookie))
 			}
 		}
 
@@ -180,7 +199,7 @@ func process(buf []byte) {
 		xaccessTokenValue, xaccount, xerr := extractUserIDFromBody(body, extractUserID, XAccessTokens...)
 		if xerr == nil {
 			//Debug(xaccount, " - ", xaccessTokenValue)
-			xaccessToken.Put(xaccount, xaccessTokenValue)
+			xaccessToken.Set(xaccount, xaccessTokenValue)
 		}
 
 	}

@@ -12,3 +12,14 @@
    - input-elasticsearch-fromDate : 검색을 시작할 시간 2021-08-01T00:00
    - input-elasticsearch-toDate : 검색을 종료할 시간 2021-08-02T00:05
    - input-elasticsearch-match : 제품별 로그 검색을 위해 @log_group 필드에서 검색할 값 
+
+
+# 주의사항
+ - gor 로 파일을 작성하면 http 요청처럼 보이지만 실제로는 \r\n이 헤더에 붙어나온다. 재전송 시에는 http 라이브러리를 사용하여 사라짐
+ 
+#파일로 요청
+./goreplay -input-file ./message.out -middleware "./custom"  -output-http-track-response -output-http http://local.knowreapp.com
+
+#8월9일 한국시간 오전 09시부터 오전 10까지 질의하려면 UTC 0-1시로 세팅해야 한다.
+./goreplay -input-elasticsearch-address https://vpc-sl-logstrg-orange-prd-q76s3uteh4ooxa3r4brwce2yau.ap-northeast-2.es.amazonaws.com -input-elasticsearch-index cwl-raw-2021.08.10 --input-elasticsearch-fromDate 2021-08-10T00:00 -input-elasticsearch-toDate 2021-08-10T01:00 -middleware "./custom"  -input-elasticsearch-match /ecs/krdky-stable -output-http-track-response -output-http http://local.knowreapp.com
+

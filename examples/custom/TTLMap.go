@@ -15,13 +15,13 @@ type TTLMap struct {
 	m map[string]*item
 }
 
-func NewTTLMap(maxTTL int) *TTLMap {
+func NewTTLMap(config AppConfig) *TTLMap {
 	m := &TTLMap{m: make(map[string]*item)}
 	go func() {
 		for now := range time.Tick(time.Second) {
 			m.Lock()
 			for k, v := range m.m {
-				if now.Unix()-v.lastAccess > int64(maxTTL) {
+				if now.Unix()-v.lastAccess > int64(config.MaxTTL) {
 					delete(m.m, k)
 				}
 			}
@@ -35,7 +35,7 @@ func (m *TTLMap) Len() int {
 	return len(m.m)
 }
 
-func (m *TTLMap) Put(k string, v string) {
+func (m *TTLMap) Set(k string, v string) {
 	m.Lock()
 	it, ok := m.m[k]
 	if ok {
