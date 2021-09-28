@@ -455,7 +455,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 	host := strings.Split(serverLog.Router, ":")[0]
 	method := serverLog.Method
 	body := serverLog.Body
-	//auth := serverLog.Token
+	auth := serverLog.Token
 	accessToken := serverLog.AccessToken
 	appFlavor := serverLog.AppFlavor
 	cookie := serverLog.Cookie
@@ -480,9 +480,12 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 	if !Empty(body) {
 		headers["Content-Length"] = fmt.Sprintf("%d", len(body))
 	}
-	//if len(auth) > 0 {
-	//	headers["Authorization"] = auth
-	//}
+
+	//cookie가 없을때만 넣어야하나?
+	if !Empty(auth) {
+		headers["Authorization"] = auth
+	}
+
 	if !Empty(accessToken) {
 		headers["x-access-token"] = accessToken
 	}
