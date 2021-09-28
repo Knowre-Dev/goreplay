@@ -60,7 +60,7 @@ func (r *RedisMap) Get(key string) (v string, exist bool) {
 	return val, true
 }
 
-func (r *RedisMap) Set(key string, value string) {
+func (r *RedisMap) Set(key string, value interface{}) {
 	err := r.rdb.HSet(r.ctx, key, r.field, value).Err()
 	if err != nil {
 		log.Fatal(err)

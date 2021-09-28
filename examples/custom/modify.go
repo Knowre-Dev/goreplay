@@ -19,12 +19,15 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/buger/goreplay/proto"
 	"github.com/buger/jsonparser"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt"
+	"log"
+	"net/url"
 	"os"
 	"strconv"
 )
@@ -36,14 +39,16 @@ const (
 )
 
 var (
-	XAccessTokens = []string{"data", "accessToken"}
+	XAccessTokens          = []string{"data", "accessToken"}
+	UserIdNotFoundErr      = errors.New("UserID not found")
+	LessonInfodNotFoundErr = errors.New("LessonInfo not found")
 )
 
-// requestID -> originalToken
-var originalTokens *RedisMap
-
-// originalToken -> replayedToken
-var xaccessToken *RedisMap
+var (
+	originalTokens *RedisMap // requestID -> originalToken
+	xaccessToken   *RedisMap
+	lastProblemMap *RedisMap
+)
 
 func main() {
 	run(bufio.NewScanner(os.Stdin))
@@ -63,12 +68,10 @@ func run(scanner *bufio.Scanner) {
 
 	originalTokens = NewRedisMap(appConfig, "cookie")
 	xaccessToken = NewRedisMap(appConfig, "xaccessToken")
-
-	//scanner := bufio.NewScanner(os.Stdin)
+	lastProblemMap = NewRedisMap(appConfig, "problems")
 
 	for scanner.Scan() {
 		encoded := scanner.Bytes()
-		//log.Println(string(encoded[:1534]))
 		buf := make([]byte, len(encoded)/2)
 		hex.Decode(buf, encoded)
 
@@ -107,8 +110,11 @@ func process(buf []byte) {
 	case '1': // Request
 		//ES에서 가져온 request
 		//refresh x-access-token
+		var userID string
+		var err error
+		var status int
 		{
-			status, err := strconv.Atoi(string(proto.Status(payload)))
+			status, err = strconv.Atoi(string(proto.Status(payload)))
 			if err != nil {
 
 			} else {
@@ -116,38 +122,60 @@ func process(buf []byte) {
 					return
 				}
 			}
+
 			oldXToken := proto.Header(payload, []byte(XAccessToken))
 			if len(oldXToken) > 0 {
 				//Debug(string(oldXToken))
 			}
 
-			account, err := extractUserID(oldXToken)
+			userID, err = extractUserIdFromToken(oldXToken)
 			if err != nil {
 				//log.Println(err)
 			} else {
-				if xToken, ok := xaccessToken.Get(account); ok {
+				if xToken, ok := xaccessToken.Get(userID); ok {
 					payload = proto.SetHeader(payload, []byte(XAccessToken), []byte(xToken))
 					buf = append(buf[:metaSize], payload...)
-
 				}
 			}
 		}
 
+		cMap := CookieMap{}
 		//refresh cookie
 		{
 			rawCookies := proto.Header(payload, []byte(COOKIE))
-			cMap := CookieMap{}
 			cMap.Parse(string(rawCookies))
 			sid := cMap[SID]
 
-			account, err := extractUserID([]byte(sid))
+			userID, err = extractUserIdFromToken([]byte(sid))
 			if err == nil {
-				if cookie, ok := originalTokens.Get(account); ok {
-					cMap.Parse(string(cookie))
+				if cookie, ok := originalTokens.Get(userID); ok {
+					cMap.Parse(cookie)
 					//Debug(cMap.String())
 					payload = proto.SetHeader(payload, []byte(COOKIE), []byte(cMap.String()))
 					buf = append(buf[:metaSize], payload...)
 				}
+			}
+		}
+
+		//find problems by userID From redis
+		var problemID int
+		var lessonInfo map[string]interface{}
+		if len(userID) > 0 && bytes.HasPrefix(proto.Path(payload), []byte("/api/v2/problem/main")) {
+
+			if problem, ok := lastProblemMap.Get(userID); ok {
+				problemID, _ = strconv.Atoi(problem)
+				lessonInfo, err = extractLessonInfoFromToken(cMap[SID])
+				if err != nil {
+					log.Fatal(err)
+				}
+				lessonInfo["problemId"] = problemID
+				data := url.Values{}
+				j, _ := json.Marshal(lessonInfo)
+				data.Set("input", string(j))
+				encoded := data.Encode()
+				payload = proto.SetHeader(payload, []byte("Content-Length"), []byte(strconv.Itoa(len(encoded))))
+				payload = bytes.Replace(payload, body, []byte(encoded), 1)
+				buf = append(buf[:metaSize], payload...)
 			}
 		}
 
@@ -161,7 +189,11 @@ func process(buf []byte) {
 		//	Debug("Remember origial token:", string(secureToken))
 		//}
 	case '3': // Replayed response
-		status, err := strconv.Atoi(string(proto.Status(payload)))
+		var userID string
+		var err error
+		var status int
+
+		status, err = strconv.Atoi(string(proto.Status(payload)))
 		if err != nil {
 
 		} else {
@@ -186,7 +218,7 @@ func process(buf []byte) {
 		if len(cookie) > 0 {
 			c.Parse(string(cookie))
 			if sid, ok := c[SID]; ok {
-				userID, err := extractUserID([]byte(sid))
+				userID, err = extractUserIdFromToken([]byte(sid))
 				if err != nil {
 					return
 				}
@@ -196,16 +228,52 @@ func process(buf []byte) {
 		}
 
 		//response의 body에서 accessToken 추출
-		xaccessTokenValue, xaccount, xerr := extractUserIDFromBody(body, extractUserID, XAccessTokens...)
-		if xerr == nil {
+		xaccessTokenValue, xaccount, xerr := extractUserIdFromJson(body, extractUserIdFromToken, XAccessTokens...)
+		if xerr != nil {
+
+		} else {
 			//Debug(xaccount, " - ", xaccessTokenValue)
+			if len(userID) == 0 {
+				userID = xaccount
+			}
 			xaccessToken.Set(xaccount, xaccessTokenValue)
+		}
+
+		//응답에서 problemID가 있는지 확인해본다.
+		problems, problemErr := extractProblemsFromJson(body)
+		if problemErr == nil {
+			var firstProblem int64
+			if len(problems) > 0 {
+				firstProblem = problems[0]
+			}
+
+			lastProblemMap.Set(userID, firstProblem)
 		}
 
 	}
 }
 
-func extractUserID(token []byte) (string, error) {
+//extractLessonInfoFromToken token에서 LessonInfo를 가져옴
+//LessonInfo
+func extractLessonInfoFromToken(token string) (map[string]interface{}, error) {
+	var combine map[string]interface{}
+	combine = make(map[string]interface{})
+
+	if t, _ := jwt.Parse(token, nil); t != nil {
+		m := t.Claims.(jwt.MapClaims)
+		if m != nil {
+			if m["lessonInfo"] != nil {
+				combine["lessonInfo"] = m["lessonInfo"].(map[string]interface{})
+				return combine, nil
+			}
+		}
+	}
+	return nil, LessonInfodNotFoundErr
+}
+
+//extractUserIdFromToken JWT token에서 userID를 리턴한다.
+//없다면 err를 리턴한다.
+func extractUserIdFromToken(token []byte) (string, error) {
 	var account string
 	tokenStr := string(token)
 	if t, _ := jwt.Parse(tokenStr, nil); t != nil {
@@ -220,26 +288,41 @@ func extractUserID(token []byte) (string, error) {
 				account = fmt.Sprintf("%d", int(m["user_id"].(float64)))
 				return account, nil
 			}
-
-			return "", errors.New("not found ID")
 		}
 	}
-	return account, errors.New("not found")
+	return account, UserIdNotFoundErr
 }
 
 type Function func([]byte) (string, error)
 
-func extractUserIDFromBody(payload []byte, fn Function, keys ...string) (string, string, error) {
+//extractUserIdFromJson json에서 keys로 접근하여 해당하는 값을 가져와 fn을 실행
+func extractUserIdFromJson(json []byte, fn Function, keys ...string) (string, string, error) {
 	var value string
 	var account string
 	var err error
 
-	if value, err = jsonparser.GetString(payload, keys...); err == nil {
+	if value, err = jsonparser.GetString(json, keys...); err == nil {
 		if fn != nil {
 			account, err = fn([]byte(value))
 		}
 	}
 	return value, account, err
+}
+
+//extractProblemsFromJson json에서 lessonInfo를 가져오기 위한 함수
+// /api/v2/lesson-composite/{:id} 에 대응
+func extractProblemsFromJson(json []byte) ([]int64, error) {
+	var problems []int64
+
+	_, err := jsonparser.ArrayEach(json, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
+		problemID, e := jsonparser.GetInt(value, "prob")
+		if e != nil {
+			return
+		}
+		problems = append(problems, problemID)
+
+	}, "data", "problems")
+	return problems, err
 }
 
 func encode(buf []byte) []byte {
