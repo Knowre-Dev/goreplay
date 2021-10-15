@@ -477,9 +477,8 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 	if !Empty(cookie) {
 		headers["Cookie"] = cookie
 	}
-	if !Empty(body) {
-		headers["Content-Length"] = fmt.Sprintf("%d", len(body))
-	}
+
+	headers["Content-Length"] = fmt.Sprintf("%d", len(body))
 
 	//cookie가 없을때만 넣어야하나?
 	if !Empty(auth) {
@@ -514,7 +513,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 func (m ElasticsearchMessage) Dump() ([]byte, error) {
 	var b bytes.Buffer
 
-	b.WriteString(fmt.Sprintf("%s %s %s\n", m.ReqType, m.ReqID, m.ReqTs))
+	b.WriteString(fmt.Sprintf("%s %s %s 0\n", m.ReqType, m.ReqID, m.ReqTs))
 	b.WriteString(fmt.Sprintf("%s %s HTTP/1.1", m.ReqMethod, m.ReqURL))
 	b.Write(proto.CRLF)
 	for key, value := range m.ReqHeaders {

@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+//CookieMap key=value; key2=value2; ... 의 값을 맵으로 바꾸어줌
+type CookieMap map[string]string
+
 type stringWriter struct {
 	w io.Writer
 }
@@ -14,8 +17,6 @@ type stringWriter struct {
 func (w stringWriter) WriteString(s string) (n int, err error) {
 	return w.w.Write([]byte(s))
 }
-
-type CookieMap map[string]string
 
 func (c CookieMap) Parse(s string) {
 	for k := range c {
