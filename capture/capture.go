@@ -218,7 +218,7 @@ func (l *Listener) Filter(ifi pcap.Interface) (filter string) {
 
 	filter = portsFilter(l.Transport, "dst", l.ports)
 
-	if len(hosts) != 0 {
+	if len(hosts) != 0 && !l.Promiscuous {
 		filter = fmt.Sprintf("((%s) and (%s))", filter, hostsFilter("dst", hosts))
 	} else {
 		filter = fmt.Sprintf("(%s)", filter)
@@ -227,7 +227,7 @@ func (l *Listener) Filter(ifi pcap.Interface) (filter string) {
 	if l.trackResponse {
 		responseFilter := portsFilter(l.Transport, "src", l.ports)
 
-		if len(hosts) != 0 {
+		if len(hosts) != 0 && !l.Promiscuous {
 			responseFilter = fmt.Sprintf("((%s) and (%s))", responseFilter, hostsFilter("src", hosts))
 		} else {
 			responseFilter = fmt.Sprintf("(%s)", responseFilter)
@@ -235,8 +235,6 @@ func (l *Listener) Filter(ifi pcap.Interface) (filter string) {
 
 		filter = fmt.Sprintf("%s or %s", filter, responseFilter)
 	}
-
-	// filter = fmt.Sprintf("((((ip[2:2] - ((ip[0]&0xf)<<2)) - ((tcp[12]&0xf0)>>2)) != 0)) and (%s)", filter)
 
 	return
 }
@@ -399,10 +397,12 @@ func (l *Listener) read() {
 					return
 				case <-timer.C:
 					if h, ok := hndl.handler.(PcapStatProvider); ok {
-						s, _ := h.Stats()
-						stats.Add("packets_received", int64(s.PacketsReceived))
-						stats.Add("packets_dropped", int64(s.PacketsDropped))
-						stats.Add("packets_if_dropped", int64(s.PacketsIfDropped))
+						s, err := h.Stats()
+						if err == nil {
+							stats.Add("packets_received", int64(s.PacketsReceived))
+							stats.Add("packets_dropped", int64(s.PacketsDropped))
+							stats.Add("packets_if_dropped", int64(s.PacketsIfDropped))
+						}
 					}
 				default:
 					data, ci, err := hndl.handler.ReadPacketData()
@@ -522,6 +522,9 @@ func (l *Listener) activatePcapFile() (err error) {
 		handle.Close()
 		return fmt.Errorf("BPF filter error: %q, filter: %s", e, l.BPFFilter)
 	}
+
+	fmt.Println("BPF Filter:", l.BPFFilter)
+
 	l.Handles["pcap_file"] = packetHandle{
 		handler: handle,
 	}
@@ -571,21 +574,26 @@ func (l *Listener) setInterfaces() (err error) {
 	}
 
 	for _, pi := range pifis {
+		if isDevice(l.host, pi) {
+			l.Interfaces = []pcap.Interface{pi}
+			return
+		}
+
 		var ni net.Interface
 		for _, i := range ifis {
+			if i.Name == pi.Name {
+				ni = i
+				break
+			}
+
 			addrs, _ := i.Addrs()
 			for _, a := range addrs {
 				for _, pa := range pi.Addresses {
-					if strings.HasPrefix(a.String(), pa.IP.String()) {
+					if a.String() == pa.IP.String() {
 						ni = i
 						break
 					}
 				}
-			}
-
-			if len(addrs) == 0 && i.Name == pi.Name {
-				ni = i
-				break
 			}
 		}
 
@@ -593,9 +601,14 @@ func (l *Listener) setInterfaces() (err error) {
 			l.loopIndex = ni.Index
 		}
 
-		if isDevice(l.host, pi) {
-			l.Interfaces = []pcap.Interface{pi}
-			return
+		if runtime.GOOS != "windows" {
+			if len(pi.Addresses) == 0 {
+				continue
+			}
+
+			if ni.Flags&net.FlagUp == 0 {
+				continue
+			}
 		}
 
 		l.Interfaces = append(l.Interfaces, pi)
@@ -604,6 +617,11 @@ func (l *Listener) setInterfaces() (err error) {
 }
 
 func isDevice(addr string, ifi pcap.Interface) bool {
+	// Windows npcap loopback have no IPs
+	if addr == "127.0.0.1" && ifi.Name == `\Device\NPF_Loopback` {
+		return true
+	}
+
 	if addr == ifi.Name {
 		return true
 	}
