@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/buger/goreplay/proto"
+	"github.com/buger/jsonparser"
 	elasticsearch7 "github.com/elastic/go-elasticsearch/v7"
 	"log"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -266,6 +268,12 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 								"logType": "formattedLog",
 							},
 						},
+						//TODO ID별로 요청을 필터링 하기 위한 부분
+						//map[string]interface{}{
+						//	"match_phrase": map[string]interface{}{
+						//		"knowre-daekyo.serverLog.user_id": 602883,
+						//	},
+						//},
 					},
 					"filter": map[string]interface{}{
 						"range": map[string]interface{}{
@@ -439,10 +447,26 @@ func limiter(ems *ElasticsearchMessage, lastTime *int64) {
 		//	diff = int64(float64(diff) / i.speedFactor)
 		//}
 
-		time.Sleep(time.Duration(diff))
+		//time.Sleep(time.Duration(diff))
 	} else {
 		*lastTime = timestamp
 	}
+}
+
+func urlEncode(encoded string) string {
+	d := url.Values{}
+	jsonparser.ObjectEach([]byte(encoded), func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
+		v, err := strconv.Unquote("\"" + string(value) + "\"")
+		if err != nil {
+			panic(err)
+			return nil
+		}
+
+		d.Set(string(key), v)
+		return nil
+	})
+
+	return d.Encode()
 }
 
 func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, error) {
@@ -454,7 +478,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 	url := serverLog.URL
 	host := strings.Split(serverLog.Router, ":")[0]
 	method := serverLog.Method
-	body := serverLog.Body
+	body := urlEncode(serverLog.Body)
 	auth := serverLog.Token
 	accessToken := serverLog.AccessToken
 	appFlavor := serverLog.AppFlavor
@@ -465,24 +489,31 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 		cookie = c.Cookie.String()
 	}
 
+	var headers = map[string]string{
+		"Host": host,
+	}
+
 	//cehck empty string
 	if Empty(body) {
 		body = ""
+	} else {
+		headers["Content-Length"] = fmt.Sprintf("%d", len(body))
 	}
 
-	var headers = map[string]string{
-		"Content-Type": "application/json; charset=utf-8",
-		"Host":         host,
+	if strings.EqualFold(method, "PUT") || strings.EqualFold(method, "POST") {
+		headers["Content-Type"] = "application/x-www-form-urlencoded"
+
 	}
 	if !Empty(cookie) {
 		headers["Cookie"] = cookie
 	}
 
-	headers["Content-Length"] = fmt.Sprintf("%d", len(body))
-
 	//cookie가 없을때만 넣어야하나?
 	if !Empty(auth) {
 		headers["Authorization"] = auth
+		if _, ok := headers["Cookie"]; !ok {
+			headers["Cookie"] = "connect.sid=" + strings.Split(auth, " ")[1]
+		}
 	}
 
 	if !Empty(accessToken) {
