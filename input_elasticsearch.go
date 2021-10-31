@@ -447,7 +447,7 @@ func limiter(ems *ElasticsearchMessage, lastTime *int64) {
 		//	diff = int64(float64(diff) / i.speedFactor)
 		//}
 
-		//time.Sleep(time.Duration(diff))
+		time.Sleep(time.Duration(diff))
 	} else {
 		*lastTime = timestamp
 	}
