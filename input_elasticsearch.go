@@ -95,27 +95,28 @@ type KnowreDaekyo struct {
 }
 
 type ServerLog struct {
-	AccessToken   string      `json:"accessToken,omitempty"`
-	AppFlavor     string      `json:"appFlavor,omitempty"`
-	AmazonTraceID string      `json:"amazonTraceId"`
-	Body          string      `json:"body"`
-	Cookie        string      `json:"cookie"`
-	Error         interface{} `json:"error"`
-	IP            string      `json:"ip"`
-	Method        string      `json:"method"`
-	Parameters    string      `json:"parameters"`
-	Performance   float64     `json:"performance"`
-	Req           interface{} `json:"req"`
-	Result        bool        `json:"result"`
-	Router        string      `json:"router"`
-	Session       string      `json:"session"`
-	SessionID     string      `json:"session_id"`
-	Trace         string      `json:"trace"`
-	Token         string      `json:"token,omitempty"`
-	URL           string      `json:"url"`
-	UserAgent     string      `json:"userAgent"`
-	UserType      string      `json:"userType"`
-	UserID        int64       `json:"user_id"`
+	RandomNumGeneratorSeed *int        `json:"randomNumGeneratorSeed,omitempty"`
+	AccessToken            string      `json:"accessToken,omitempty"`
+	AppFlavor              string      `json:"appFlavor,omitempty"`
+	AmazonTraceID          string      `json:"amazonTraceId"`
+	Body                   string      `json:"body"`
+	Cookie                 string      `json:"cookie"`
+	Error                  interface{} `json:"error"`
+	IP                     string      `json:"ip"`
+	Method                 string      `json:"method"`
+	Parameters             string      `json:"parameters"`
+	Performance            float64     `json:"performance"`
+	Req                    interface{} `json:"req"`
+	Result                 bool        `json:"result"`
+	Router                 string      `json:"router"`
+	Session                string      `json:"session"`
+	SessionID              string      `json:"session_id"`
+	Trace                  string      `json:"trace"`
+	Token                  string      `json:"token,omitempty"`
+	URL                    string      `json:"url"`
+	UserAgent              string      `json:"userAgent"`
+	UserType               string      `json:"userType"`
+	UserID                 int64       `json:"user_id"`
 }
 
 type ElasticsearchMessage struct {
@@ -171,9 +172,7 @@ func NewElasticsearchInput(address string, config *InputElasticSearchConfig) *El
 
 	go func(config *InputElasticSearchConfig) {
 		es(config, e.messages)
-
 	}(config)
-
 	return e
 }
 
@@ -201,6 +200,7 @@ func (e *ElasticsearchInput) PluginRead() (*Message, error) {
 }
 
 func (e *ElasticsearchInput) Close() error {
+
 	close(e.quit)
 	return nil
 }
@@ -269,11 +269,11 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 							},
 						},
 						//TODO ID별로 요청을 필터링 하기 위한 부분
-						//map[string]interface{}{
-						//	"match_phrase": map[string]interface{}{
-						//		"knowre-daekyo.serverLog.user_id": 602883,
-						//	},
-						//},
+						map[string]interface{}{
+							"match_phrase": map[string]interface{}{
+								"knowre-daekyo.serverLog.user_id": 112667,
+							},
+						},
 					},
 					"filter": map[string]interface{}{
 						"range": map[string]interface{}{
@@ -483,6 +483,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 	accessToken := serverLog.AccessToken
 	appFlavor := serverLog.AppFlavor
 	cookie := serverLog.Cookie
+	randomNumGeneratorSeed := serverLog.RandomNumGeneratorSeed
 
 	if len(serverLog.Cookie) > 0 {
 		c, _ := UnmarshalServerLogCookie([]byte(serverLog.Cookie))
@@ -491,6 +492,10 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 
 	var headers = map[string]string{
 		"Host": host,
+	}
+
+	if randomNumGeneratorSeed != nil && *randomNumGeneratorSeed > 0 {
+		headers["random-num-generator-seed"] = fmt.Sprintf("%d", *randomNumGeneratorSeed)
 	}
 
 	//cehck empty string

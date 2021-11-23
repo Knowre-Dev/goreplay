@@ -29,7 +29,6 @@ func TestElasticSearchConfigRange(t *testing.T) {
 
 func TestES(t *testing.T) {
 	const layout = "cwl-raw-2006.01.02"
-	quit := make(chan struct{})
 	//date := time.Now().AddDate(0,-1,1)
 	date := time.Now().AddDate(0, 0, -1)
 	indexName := date.Format(layout)
@@ -52,7 +51,8 @@ func TestES(t *testing.T) {
 	for {
 		msg, err := input.PluginRead()
 		if err != nil {
-			log.Fatal(err)
+			assert.Equal(t, err, ErrorStopped)
+			break
 		}
 		fmt.Println(string(msg.Meta))
 		fmt.Println(string(msg.Data))
@@ -60,7 +60,6 @@ func TestES(t *testing.T) {
 	}
 
 	_ = input
-	<-quit
 
 	log.Println("TestES end")
 
