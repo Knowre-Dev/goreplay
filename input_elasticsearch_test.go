@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -92,5 +93,42 @@ func TestDump(t *testing.T) {
 	fmt.Println(httpHeader)
 
 	//	assert.True()
+
+}
+
+func TestDecodeBody(t *testing.T) {
+	raws := [][]byte{
+		[]byte(`{\"input\":\"{\\\"account\\\":\\\"jimy@knowre.com\\\", \\\"password\\\":\\\"111111\\\", \\\"productType\\\": \\\"AIMS\\\"}\"}`),
+		[]byte(`{\"account\":\"jimy@knowre.com\", \"password\":\"111111\", \"productType\": \"AIMS\"}`),
+		[]byte(`{"altToken":"a4de2a0924a0f13509da5ab5791886e4aad97f3349b9db"}`),
+	}
+
+	for _, raw := range raws {
+		var msg string
+		var err error
+		body := string(raw)
+		if IsJSON(body) {
+			continue
+		}
+
+		body = "\"" + body + "\""
+		msg, err = strconv.Unquote(body)
+
+		if err != nil {
+			log.Fatal(err, " ", string(raw))
+		}
+
+		log.Println(msg)
+	}
+	//
+	//for _, raw := range raws {
+	//	body := "\"" + string(raw) + "\""
+	//	s, err := strconv.Unquote(body)
+	//	if err != nil {
+	//		log.Fatal(err)
+	//	}
+	//
+	//	log.Println(s)
+	//}
 
 }

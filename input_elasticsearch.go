@@ -237,6 +237,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 	var lastTime int64 = -1
 
 	for i := 0; i < loop; i++ {
+		//time.Sleep(time.Second * 1)
 		var subDocuments = 0
 		batchNum = 0
 		var buf bytes.Buffer
@@ -269,11 +270,11 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 							},
 						},
 						//TODO ID별로 요청을 필터링 하기 위한 부분
-						map[string]interface{}{
-							"match_phrase": map[string]interface{}{
-								"knowre-daekyo.serverLog.user_id": 112667,
-							},
-						},
+						//map[string]interface{}{
+						//	"match_phrase": map[string]interface{}{
+						//		"knowre-daekyo.serverLog.user_id": 112667,
+						//	},
+						//},
 					},
 					"filter": map[string]interface{}{
 						"range": map[string]interface{}{
@@ -359,7 +360,6 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 				messages <- ems
 
 			}
-			//log.Println(strings.Repeat("-", 80))
 		}
 
 		for {
@@ -397,20 +397,10 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 				var e []byte
 				var ems *ElasticsearchMessage
 				for _, hit := range resJson["hits"].(map[string]interface{})["hits"].([]interface{}) {
-					//log.Printf(" * ID=%s, %s", hit.(map[string]interface{})["_id"], hit.(map[string]interface{})["_source"])
-					//messages <- hit
 					e, err = json.Marshal(hit)
 					if err != nil {
 						log.Fatalf("json marshal err : %s\n", err)
 					}
-
-					//f, ferr := ioutil.TempFile("./tmp", "gor")
-					//if ferr != nil {
-					//	panic(ferr)
-					//}
-					//
-					//bytes.NewReader(e).WriteTo(f)
-					//f.Close()
 
 					doc, uErr := UnmarshalElasticsearchDocument(e)
 					if uErr != nil {
@@ -456,13 +446,23 @@ func limiter(ems *ElasticsearchMessage, lastTime *int64) {
 func urlEncode(encoded string) string {
 	d := url.Values{}
 	jsonparser.ObjectEach([]byte(encoded), func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
-		v, err := strconv.Unquote("\"" + string(value) + "\"")
-		if err != nil {
-			panic(err)
-			return nil
-		}
+		body := string(value)
 
-		d.Set(string(key), v)
+		if !Empty(body) {
+			if IsJSON(body) {
+				d.Set(string(key), body)
+				return nil
+			}
+
+			body = "\"" + body + "\""
+			v, err := strconv.Unquote(body)
+			if err != nil {
+				log.Fatal(err, " body : ", body)
+				return nil
+			}
+
+			d.Set(string(key), v)
+		}
 		return nil
 	})
 
@@ -561,4 +561,10 @@ func (m ElasticsearchMessage) Dump() ([]byte, error) {
 	b.WriteString(m.ReqBody)
 
 	return b.Bytes(), nil
+}
+
+//IsJSON str 이 json string인지 확인한다.
+func IsJSON(str string) bool {
+	var js json.RawMessage
+	return json.Unmarshal([]byte(str), &js) == nil
 }
