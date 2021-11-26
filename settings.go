@@ -32,6 +32,7 @@ type AppSettings struct {
 
 	SplitOutput          bool   `json:"split-output"`
 	RecognizeTCPSessions bool   `json:"recognize-tcp-sessions"`
+	HashSessions         bool   `json:"hash-sessions"`
 	Pprof                string `json:"http-pprof"`
 
 	InputDummy   MultiOption `json:"input-dummy"`
@@ -217,6 +218,7 @@ func init() {
 	flag.StringVar(&fromDate, "input-elasticsearch-fromDate", "", "2021-08-01T00:00")
 	flag.StringVar(&toDate, "input-elasticsearch-toDate", "", "2021-08-02T00:05")
 	flag.StringVar(&Settings.InputElasticSearchConfig.Match, "input-elasticsearch-match", "", "Applies to the @log_group field.")
+	flag.BoolVar(&Settings.HashSessions, "hash-sessions", false, "ELB 의 UserID를 기반으로 하여 worker들에게 일을 분배함, Split-Output 옵션 활성화 필요")
 
 	// default values, using for tests
 	Settings.OutputFileConfig.SizeLimit = 33554432
