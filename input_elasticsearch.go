@@ -127,6 +127,7 @@ type ElasticsearchMessage struct {
 	ReqMethod  string            `json:"Req_Method"`
 	ReqBody    string            `json:"Req_Body,omitempty"`
 	ReqHeaders map[string]string `json:"Req_Headers,omitempty"`
+	UserID     int64             `json:"-"`
 }
 
 type InputElasticSearchConfig struct {
@@ -244,12 +245,8 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 		gte := c.FromDate.Add(time.Duration(i) * time.Minute)
 		lt := gte.Add(time.Duration(59)*time.Second + 999*time.Millisecond)
 		log.Println(gte, "  ", lt)
-		//time.Sleep(time.Second*30)
 
 		body := map[string]interface{}{
-			//"_source": map[string]interface{}{
-			//	"includes": c.Includes,
-			//},
 			"sort": []interface{}{
 				map[string]interface{}{
 					"@timestamp": "asc",
@@ -484,6 +481,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 	appFlavor := serverLog.AppFlavor
 	cookie := serverLog.Cookie
 	randomNumGeneratorSeed := serverLog.RandomNumGeneratorSeed
+	userID := serverLog.UserID
 
 	if len(serverLog.Cookie) > 0 {
 		c, _ := UnmarshalServerLogCookie([]byte(serverLog.Cookie))
@@ -540,6 +538,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 		ReqMethod:  method,
 		ReqBody:    body,
 		ReqHeaders: headers,
+		UserID:     userID,
 	}
 	return ems, nil
 }
@@ -549,7 +548,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 func (m ElasticsearchMessage) Dump() ([]byte, error) {
 	var b bytes.Buffer
 
-	b.WriteString(fmt.Sprintf("%s %s %s 0\n", m.ReqType, m.ReqID, m.ReqTs))
+	b.WriteString(fmt.Sprintf("%s %s %s 0 %d\n", m.ReqType, m.ReqID, m.ReqTs, m.UserID))
 	b.WriteString(fmt.Sprintf("%s %s HTTP/1.1", m.ReqMethod, m.ReqURL))
 	b.Write(proto.CRLF)
 	for key, value := range m.ReqHeaders {
