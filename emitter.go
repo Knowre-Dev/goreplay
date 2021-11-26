@@ -131,6 +131,17 @@ func CopyMulty(src PluginReader, writers ...PluginWriter) error {
 			}
 
 			if Settings.SplitOutput {
+				if Settings.HashSessions {
+					h := fnv.New64a()
+					h.Write(meta[4])
+
+					wIndex = int(h.Sum64()) % len(writers)
+					if _, err := writers[wIndex].PluginWrite(msg); err != nil {
+						return err
+					}
+					continue
+				}
+
 				if Settings.RecognizeTCPSessions {
 					if !PRO {
 						log.Fatal("Detailed TCP sessions work only with PRO license")
