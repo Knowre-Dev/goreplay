@@ -5,8 +5,8 @@ import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
+	"hash/fnv"
 	"log"
-	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -61,6 +61,7 @@ type HTTPOutput struct {
 	queue         chan *Message
 	responses     chan *response
 	stop          chan bool // Channel used only to indicate goroutine should shutdown
+	channels      []chan *Message
 }
 
 // NewHTTPOutput constructor for HTTPOutput
@@ -85,12 +86,12 @@ func NewHTTPOutput(address string, config *HTTPOutputConfig) PluginReadWriter {
 	if config.WorkersMin <= 0 {
 		config.WorkersMin = 1
 	}
-	if config.WorkersMin > 1000 {
-		config.WorkersMin = 1000
-	}
-	if config.WorkersMax <= 0 {
-		config.WorkersMax = math.MaxInt32 // idealy so large
-	}
+	//if config.WorkersMin > 1000 {
+	//	config.WorkersMin = 1000
+	//}
+	//if config.WorkersMax <= 0 {
+	//	config.WorkersMax = math.MaxInt32 // idealy so large
+	//}
 	if config.WorkersMax < config.WorkersMin {
 		config.WorkersMax = config.WorkersMin
 	}
@@ -109,6 +110,10 @@ func NewHTTPOutput(address string, config *HTTPOutputConfig) PluginReadWriter {
 		o.queueStats = NewGorStat("output_http", o.config.StatsMs)
 	}
 
+	//set workers min, max default 200
+	config.WorkersMax = 200
+	config.WorkersMin = config.WorkersMax
+
 	o.queue = make(chan *Message, o.config.QueueLen)
 	if o.config.TrackResponses {
 		o.responses = make(chan *response, o.config.QueueLen)
@@ -122,15 +127,21 @@ func NewHTTPOutput(address string, config *HTTPOutputConfig) PluginReadWriter {
 	}
 	o.client = NewHTTPClient(o.config)
 	o.activeWorkers += int32(o.config.WorkersMin)
+
+	o.channels = make([]chan *Message, config.WorkersMin)
 	for i := 0; i < o.config.WorkersMin; i++ {
-		go o.startWorker()
+		o.channels[i] = make(chan *Message)
+		go o.startWorker(o.channels[i])
 	}
+
 	go o.workerMaster()
 	return o
 }
 
 func (o *HTTPOutput) workerMaster() {
 	var timer = time.NewTimer(o.config.WorkerTimeout)
+	cur := int32(0)
+	h := fnv.New64a()
 	defer func() {
 		// recover from panics caused by trying to send in
 		// a closed chan(o.stopWorker)
@@ -141,6 +152,20 @@ func (o *HTTPOutput) workerMaster() {
 		select {
 		case <-o.stop:
 			return
+		case msg := <-o.queue:
+			meta := bytes.Split(msg.Meta, []byte(" "))
+			if len(meta) == 4 {
+				h.Write(meta[4])
+				o.channels[h.Sum64()%uint64(o.activeWorkers)] <- msg
+				h.Reset()
+			} else {
+				if cur >= o.activeWorkers {
+					cur = cur % o.activeWorkers
+				}
+				o.channels[cur] <- msg
+				cur++
+			}
+
 		default:
 			<-timer.C
 		}
@@ -156,12 +181,12 @@ func (o *HTTPOutput) workerMaster() {
 	}
 }
 
-func (o *HTTPOutput) startWorker() {
+func (o *HTTPOutput) startWorker(queue chan *Message) {
 	for {
 		select {
 		case <-o.stopWorker:
 			return
-		case msg := <-o.queue:
+		case msg := <-queue:
 			o.sendRequest(o.client, msg)
 		}
 	}
@@ -182,13 +207,13 @@ func (o *HTTPOutput) PluginWrite(msg *Message) (n int, err error) {
 	if o.config.Stats {
 		o.queueStats.Write(len(o.queue))
 	}
-	if len(o.queue) > 0 {
-		// try to start a new worker to serve
-		if atomic.LoadInt32(&o.activeWorkers) < int32(o.config.WorkersMax) {
-			go o.startWorker()
-			atomic.AddInt32(&o.activeWorkers, 1)
-		}
-	}
+	//if len(o.queue) > 0 {
+	//	// try to start a new worker to serve
+	//	if atomic.LoadInt32(&o.activeWorkers) < int32(o.config.WorkersMax) {
+	//		go o.startWorker()
+	//		atomic.AddInt32(&o.activeWorkers, 1)
+	//	}
+	//}
 	return len(msg.Data) + len(msg.Meta), nil
 }
 
@@ -246,6 +271,9 @@ func (o *HTTPOutput) String() string {
 func (o *HTTPOutput) Close() error {
 	close(o.stop)
 	close(o.stopWorker)
+	for _, c := range o.channels {
+		close(c)
+	}
 	return nil
 }
 
