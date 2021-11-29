@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -131,7 +132,7 @@ func CopyMulty(src PluginReader, writers ...PluginWriter) error {
 			}
 
 			if Settings.SplitOutput {
-				if Settings.HashSessions {
+				if Settings.HashSessions && len(meta) >= 5 && !bytes.Equal(meta[4], []byte("0")) {
 					h := fnv.New64a()
 					h.Write(meta[4])
 

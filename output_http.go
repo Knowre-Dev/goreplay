@@ -154,7 +154,7 @@ func (o *HTTPOutput) workerMaster() {
 			return
 		case msg := <-o.queue:
 			meta := bytes.Split(msg.Meta, []byte(" "))
-			if len(meta) == 4 {
+			if len(meta) >= 5 && !bytes.Equal(meta[4], []byte("0")) {
 				h.Write(meta[4])
 				o.channels[h.Sum64()%uint64(o.activeWorkers)] <- msg
 				h.Reset()
