@@ -8,6 +8,7 @@ import (
 	"github.com/buger/goreplay/proto"
 	"github.com/buger/jsonparser"
 	elasticsearch7 "github.com/elastic/go-elasticsearch/v7"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -211,96 +212,55 @@ func (e *ElasticsearchInput) String() string {
 }
 
 func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
-	const layout = "2006-01-02T15:04:05.000Z"
-
 	cfg := elasticsearch7.Config{
 		Addresses: c.Address,
 		Transport: c.Transport,
 	}
 
-	es, err := elasticsearch7.NewClient(cfg)
+	esClient, err := elasticsearch7.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("Error creating the client: %s", err)
 	}
 
-	res, err := es.Info()
+	res, err := esClient.Info()
 	if err != nil {
 		log.Fatalf("Error getting response: %s", err)
 	}
 	defer res.Body.Close()
 
-	loop := c.Range()
-	log.Printf("loop range %d\n", loop)
+	timeRange := c.Range()
+	log.Printf("loop count timeRange %d\n", timeRange)
 	var size = 1000
 	var scrollID string
+	var total int64
 	var batchNum = 0
 	var documents = 0
 	var lastTime int64 = -1
+	var resultJSON, scrollJSON []byte
+	var executionTime int64
 
-	for i := 0; i < loop; i++ {
+	for i := 0; i < timeRange; i++ {
 		//time.Sleep(time.Second * 1)
 		var subDocuments = 0
 		batchNum = 0
 		var buf bytes.Buffer
-		gte := c.FromDate.Add(time.Duration(i) * time.Minute)
-		lt := gte.Add(time.Duration(59)*time.Second + 999*time.Millisecond)
-		log.Println(gte, "  ", lt)
+		query := makeQueryString(c.FromDate, c.Match, i)
 
-		body := map[string]interface{}{
-			"sort": []interface{}{
-				map[string]interface{}{
-					"@timestamp": "asc",
-				},
-			},
-			"query": map[string]interface{}{
-
-				"bool": map[string]interface{}{
-					"must": []interface{}{
-						map[string]interface{}{
-							"match_phrase": map[string]interface{}{
-								"@log_group": c.Match,
-							},
-						},
-						map[string]interface{}{
-							"match_phrase": map[string]interface{}{
-								"logType": "formattedLog",
-							},
-						},
-						//TODO ID별로 요청을 필터링 하기 위한 부분
-						//map[string]interface{}{
-						//	"match_phrase": map[string]interface{}{
-						//		"knowre-daekyo.serverLog.user_id": 112667,
-						//	},
-						//},
-					},
-					"filter": map[string]interface{}{
-						"range": map[string]interface{}{
-							"@timestamp": map[string]interface{}{
-								"time_zone": "+09:00",
-								"gte":       gte.Format(layout),
-								"lt":        lt.Format(layout),
-							},
-						},
-					},
-				},
-			},
-		}
-
-		dslQuery, _ := json.Marshal(body)
+		dslQuery, _ := json.Marshal(query)
 		log.Println(string(dslQuery))
 
-		if err = json.NewEncoder(&buf).Encode(body); err != nil {
+		if err = json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Fatalf("Error encoding query : %s", err)
 		}
 
-		res, err = es.Search(
-			es.Search.WithContext(context.Background()),
-			es.Search.WithIndex(c.Index),
-			es.Search.WithBody(&buf),
-			es.Search.WithTrackTotalHits(true),
-			es.Search.WithPretty(),
-			es.Search.WithSize(size),
-			es.Search.WithScroll(time.Minute),
+		res, err = esClient.Search(
+			esClient.Search.WithContext(context.Background()),
+			esClient.Search.WithIndex(c.Index),
+			esClient.Search.WithBody(&buf),
+			esClient.Search.WithTrackTotalHits(true),
+			esClient.Search.WithPretty(),
+			esClient.Search.WithSize(size),
+			esClient.Search.WithScroll(time.Minute),
 		)
 
 		if err != nil {
@@ -308,118 +268,138 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			res.Body.Close()
 		}
 		if res.IsError() {
-			b, _ := json.Marshal(body)
+			b, _ := json.Marshal(query)
 			log.Println(string(b))
 			log.Fatalf("Error response: %s", res)
 		}
 
-		var resJson map[string]interface{}
-		if err := json.NewDecoder(res.Body).Decode(&resJson); err != nil {
-			log.Fatalf("Error parsing the response body: %s", err)
-		}
+		resultJSON, err = ioutil.ReadAll(res.Body)
+		checkErr(err)
+		scrollID, err = jsonparser.GetString(resultJSON, "_scroll_id")
+		checkErr(err)
+		total, err = jsonparser.GetInt(resultJSON, "hits", "total", "value")
+		checkErr(err)
+		executionTime, err = jsonparser.GetInt(resultJSON, "took")
+		checkErr(err)
 
-		scrollID = resJson["_scroll_id"].(string)
 		// Print the response status, number of results, and request duration.
 		log.Printf(
 			"[%s] %d hits; took: %dms   scroll_id:%s",
 			res.Status(),
-			int(resJson["hits"].(map[string]interface{})["total"].(map[string]interface{})["value"].(float64)),
-			int(resJson["took"].(float64)),
+			total,
+			executionTime,
 			scrollID,
 		)
-		hits := resJson["hits"].(map[string]interface{})["hits"].([]interface{})
-		documents += len(hits)
-		subDocuments += len(hits)
-		if len(hits) > 0 {
-			//log.Println("Batch   ", batchNum)
-			//log.Println("ScrollID", scrollID)
 
-			log.Printf("0-Batch %d, ScrollID %s  message_len %d\n", batchNum, scrollID, len(messages))
-
-			var e []byte
+		log.Printf("0-Batch %d, ScrollID %s  message_len %d\n", batchNum, scrollID[:10], len(messages))
+		jsonparser.ArrayEach(resultJSON, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
 			var ems *ElasticsearchMessage
-			for _, hit := range resJson["hits"].(map[string]interface{})["hits"].([]interface{}) {
-				e, err = json.Marshal(hit)
-				if err != nil {
-					log.Fatalf("json marshal err : %s\n", err)
-				}
-				doc, uErr := UnmarshalElasticsearchDocument(e)
-				if uErr != nil {
-					log.Fatalf("document decode err : %s\n", uErr)
-				}
-				ems, err = NewElasticsearchMessage(doc)
-				if err != nil {
-					log.Fatal(err)
-				}
+			doc, uErr := UnmarshalElasticsearchDocument(value)
+			checkErr(uErr)
+			ems, err = NewElasticsearchMessage(doc)
+			checkErr(err)
 
-				limiter(ems, &lastTime)
+			limiter(ems, &lastTime)
+			messages <- ems
 
-				messages <- ems
+			subDocuments++
+		}, "hits", "hits")
 
-			}
-		}
-
+		scrollDocuments := 0
 		for {
 			batchNum++
-			res, err := es.Scroll(es.Scroll.WithScrollID(scrollID), es.Scroll.WithScroll(time.Minute))
-			if err != nil {
-				log.Fatalf("Error: %s", err)
+			scrollRes, scrollErr := esClient.Scroll(esClient.Scroll.WithScrollID(scrollID), esClient.Scroll.WithScroll(time.Minute))
+			if scrollErr != nil {
+				log.Fatalf("Error: %s", scrollErr)
 			}
-			if res.IsError() {
-				log.Fatalf("Error response: %s", res)
-			}
-
-			var r map[string]interface{}
-			if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-				res.Body.Close()
-				log.Fatalf("Error parsing the response body: %s", err)
+			if scrollRes.IsError() {
+				log.Fatalf("Error response: %s", scrollRes)
 			}
 
-			// Extract the scrollID from response
-			scrollID = r["_scroll_id"].(string)
+			scrollJSON, err = ioutil.ReadAll(scrollRes.Body)
+			scrollID, err = jsonparser.GetString(scrollJSON, "_scroll_id")
+			checkErr(err)
 
-			// Extract the search results
-			hits := r["hits"].(map[string]interface{})["hits"].([]interface{})
-			documents += len(hits)
-			subDocuments += len(hits)
+			jsonparser.ArrayEach(scrollJSON, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
+				if subDocuments == 0 {
+					log.Printf("1-Batch %d, ScrollID %s  message_len %d\n", batchNum, scrollID[:10], len(messages))
 
-			// Break out of the loop when there are no results
-			if len(hits) < 1 {
-				log.Println("Finished scrolling. SubDocuments ", subDocuments)
-				res.Body.Close()
-				break
-			} else {
-				log.Printf("1-Batch %d, ScrollID %s  message_len %d\n", batchNum, scrollID, len(messages))
-
-				var e []byte
-				var ems *ElasticsearchMessage
-				for _, hit := range resJson["hits"].(map[string]interface{})["hits"].([]interface{}) {
-					e, err = json.Marshal(hit)
-					if err != nil {
-						log.Fatalf("json marshal err : %s\n", err)
-					}
-
-					doc, uErr := UnmarshalElasticsearchDocument(e)
-					if uErr != nil {
-						log.Fatalf("document decode err : %s\n", uErr)
-					}
-					ems, err = NewElasticsearchMessage(doc)
-					if err != nil {
-						log.Fatal(err)
-					}
-					limiter(ems, &lastTime)
-
-					messages <- ems
 				}
-				log.Println(strings.Repeat("-", 80))
+				var ems *ElasticsearchMessage
+				doc, uErr := UnmarshalElasticsearchDocument(value)
+				checkErr(uErr)
+				ems, err = NewElasticsearchMessage(doc)
+				checkErr(err)
+
+				//limiter(ems, &lastTime)
+				messages <- ems
+				scrollDocuments++
+			}, "hits", "hits")
+
+			if scrollDocuments < 1 {
+				log.Println("Finished scrolling. SubDocuments ", subDocuments)
+				scrollRes.Body.Close()
+				break
 			}
-			res.Body.Close()
+			log.Println(strings.Repeat("-", 80))
+			scrollRes.Body.Close()
 		}
+		documents = documents + subDocuments + scrollDocuments
+
 		res.Body.Close()
 
 	}
 
 	log.Println("Total : ", documents)
+}
+
+func makeQueryString(fromDate time.Time, match string, i int) map[string]interface{} {
+	const layout = "2006-01-02T15:04:05.000Z"
+
+	gte := fromDate.Add(time.Duration(i) * time.Minute)
+	lt := gte.Add(time.Duration(59)*time.Second + 999*time.Millisecond)
+	log.Println(gte, "  ", lt)
+
+	query := map[string]interface{}{
+		"sort": []interface{}{
+			map[string]interface{}{
+				"@timestamp": "asc",
+			},
+		},
+		"query": map[string]interface{}{
+
+			"bool": map[string]interface{}{
+				"must": []interface{}{
+					map[string]interface{}{
+						"match_phrase": map[string]interface{}{
+							"@log_group": match,
+						},
+					},
+					map[string]interface{}{
+						"match_phrase": map[string]interface{}{
+							"logType": "formattedLog",
+						},
+					},
+					//TODO ID별로 요청을 필터링 하기 위한 부분
+					//map[string]interface{}{
+					//	"match_phrase": map[string]interface{}{
+					//		"knowre-daekyo.serverLog.user_id": 112667,
+					//	},
+					//},
+				},
+				"filter": map[string]interface{}{
+					"range": map[string]interface{}{
+						"@timestamp": map[string]interface{}{
+							"time_zone": "+09:00",
+							"gte":       gte.Format(layout),
+							"lt":        lt.Format(layout),
+						},
+					},
+				},
+			},
+		},
+	}
+	return query
 }
 
 func limiter(ems *ElasticsearchMessage, lastTime *int64) {
@@ -434,7 +414,7 @@ func limiter(ems *ElasticsearchMessage, lastTime *int64) {
 		//	diff = int64(float64(diff) / i.speedFactor)
 		//}
 
-		time.Sleep(time.Duration(diff))
+		//time.Sleep(time.Duration(diff))
 	} else {
 		*lastTime = timestamp
 	}
@@ -566,4 +546,10 @@ func (m ElasticsearchMessage) Dump() ([]byte, error) {
 func IsJSON(str string) bool {
 	var js json.RawMessage
 	return json.Unmarshal([]byte(str), &js) == nil
+}
+
+func checkErr(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
 }
