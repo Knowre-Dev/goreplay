@@ -431,19 +431,26 @@ func urlEncode(encoded string) string {
 				return nil
 			}
 
-			body = "\"" + body + "\""
-			v, err := strconv.Unquote(body)
+			unquoted, err := unquote(body)
 			if err != nil {
 				log.Fatal(err, " body : ", body)
 				return nil
 			}
-
-			d.Set(string(key), v)
+			d.Set(string(key), unquoted)
 		}
 		return nil
 	})
 
 	return d.Encode()
+}
+
+func unquote(encoded string) (string, error) {
+	body := "\"" + encoded + "\""
+	v, err := strconv.Unquote(body)
+	if err != nil {
+		return "", err
+	}
+	return v, nil
 }
 
 func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, error) {

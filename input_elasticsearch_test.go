@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"github.com/buger/jsonparser"
 	"github.com/stretchr/testify/assert"
 	"log"
 	"net/http"
 	"net/textproto"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +30,6 @@ func TestElasticSearchConfigRange(t *testing.T) {
 
 func TestES(t *testing.T) {
 	const layout = "cwl-raw-2006.01.02"
-	//date := time.Now().AddDate(0,-1,1)
 	date := time.Now().AddDate(0, 0, -1)
 	indexName := date.Format(layout)
 	transport := &http.Transport{
@@ -46,22 +45,28 @@ func TestES(t *testing.T) {
 		ToDate:    time.Date(y, m, d, 0, 1, 0, 0, time.Local),
 		Includes:  []string{},
 		Transport: transport,
+		Match:     "/ecs/krdky-stable",
 	}
 
 	input := NewElasticsearchInput("", &config)
-	for {
-		msg, err := input.PluginRead()
-		if err != nil {
-			assert.Equal(t, err, ErrorStopped)
-			break
-		}
+	output := NewTestOutput(func(msg *Message) {
 		fmt.Println(string(msg.Meta))
 		fmt.Println(string(msg.Data))
 		fmt.Println(strings.Repeat("-", 80))
+	})
+
+	plugins := &InOutPlugins{
+		Inputs:  []PluginReader{input},
+		Outputs: []PluginWriter{output},
 	}
 
-	_ = input
+	plugins.All = append(plugins.All, input, output)
 
+	emitter := NewEmitter()
+	defer emitter.Close()
+	go emitter.Start(plugins, Settings.Middleware)
+
+	time.Sleep(time.Second * 10)
 	log.Println("TestES end")
 
 }
@@ -96,39 +101,81 @@ func TestDump(t *testing.T) {
 
 }
 
-func TestDecodeBody(t *testing.T) {
-	raws := [][]byte{
-		[]byte(`{\"input\":\"{\\\"account\\\":\\\"jimy@knowre.com\\\", \\\"password\\\":\\\"111111\\\", \\\"productType\\\": \\\"AIMS\\\"}\"}`),
-		[]byte(`{\"account\":\"jimy@knowre.com\", \"password\":\"111111\", \"productType\": \"AIMS\"}`),
-		[]byte(`{"altToken":"a4de2a0924a0f13509da5ab5791886e4aad97f3349b9db"}`),
+type DecodeTest struct {
+	Data     []byte
+	Err      error
+	Expected []byte
+}
+
+func TestUnquote(t *testing.T) {
+	raws := []DecodeTest{
+		{
+			Data:     []byte(`{\"input\":\"{\\\"account\\\":\\\"jimy@knowre.com\\\", \\\"password\\\":\\\"111111\\\", \\\"productType\\\": \\\"AIMS\\\"}\"}`),
+			Err:      nil,
+			Expected: []byte(`{"input":"{\"account\":\"jimy@knowre.com\", \"password\":\"111111\", \"productType\": \"AIMS\"}"}`),
+		},
+		{
+			Data:     []byte(`{\"account\":\"jimy@knowre.com\", \"password\":\"111111\", \"productType\": \"AIMS\"}`),
+			Err:      nil,
+			Expected: []byte(`{"account":"jimy@knowre.com", "password":"111111", "productType": "AIMS"}`),
+		},
+	}
+	for _, raw := range raws {
+		value, err := unquote(string(raw.Data))
+		if assert.Equal(t, raw.Err, err) {
+			assert.Equal(t, raw.Expected, []byte(value))
+		}
+	}
+}
+
+func TestUrlEncode(t *testing.T) {
+	raws := []DecodeTest{
+		{
+			Data:     []byte(`{"altToken":"a4de2a0924a0f13509da5ab5791886e4aad97f3349b9db"}`),
+			Err:      nil,
+			Expected: []byte("altToken=a4de2a0924a0f13509da5ab5791886e4aad97f3349b9db"),
+		},
+		{
+			Data:     []byte(`{"input":"{\"answer\":\"[{\\\"type\\\":\\\"Box\\\",\\\"elements\\\":[{\\\"type\\\":\\\"Text\\\",\\\"content\\\":\\\"삼각기둥\\\"},{\\\"type\\\":\\\"Text\\\",\\\"content\\\":\\\"에 대한 설명 중 옳은 것은?\\\"},{\\\"type\\\":\\\"LineBreak\\\"},{\\\"type\\\":\\\"Box\\\",\\\"elements\\\":[{\\\"type\\\":\\\"SingleChoice\\\",\\\"choices\\\":[{\\\"type\\\":\\\"Blank\\\"},{\\\"type\\\":\\\"Blank\\\"},{\\\"type\\\":\\\"Blank\\\"},{\\\"type\\\":\\\"Box\\\",\\\"elements\\\":[{\\\"type\\\":\\\"Box\\\",\\\"elements\\\":[{\\\"type\\\":\\\"Text\\\",\\\"content\\\":\\\"꼭짓점의 개수는 \\\"},{\\\"type\\\":\\\"Math\\\",\\\"content\\\":\\\"6\\\"},{\\\"type\\\":\\\"Text\\\",\\\"content\\\":\\\" 개, 모서리의 개수는 \\\"},{\\\"type\\\":\\\"Math\\\",\\\"content\\\":\\\"9\\\"},{\\\"type\\\":\\\"Text\\\",\\\"content\\\":\\\" 개이다.\\\"}]}]}],\\\"answer\\\":\\\"3\\\"}]},{\\\"type\\\":\\\"Box\\\",\\\"elements\\\":[{\\\"type\\\":\\\"Box\\\",\\\"elements\\\":[]}]},{\\\"type\\\":\\\"Box\\\",\\\"elements\\\":[{\\\"type\\\":\\\"Box\\\",\\\"elements\\\":[]}]}]}]\",\"lessonInfo\":{\"compositeId\":\"KNRLESS50393\",\"curriculumId\":14,\"curriculumType\":\"SEMESTER\",\"lessonId\":57729,\"lessonType\":\"LESSON\"},\"parentId\":-1,\"problemId\":806387,\"time_left\":-1}"}`),
+			Err:      nil,
+			Expected: []byte(`input=%7B%22answer%22%3A%22%5B%7B%5C%22type%5C%22%3A%5C%22Box%5C%22%2C%5C%22elements%5C%22%3A%5B%7B%5C%22type%5C%22%3A%5C%22Text%5C%22%2C%5C%22content%5C%22%3A%5C%22%EC%82%BC%EA%B0%81%EA%B8%B0%EB%91%A5%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Text%5C%22%2C%5C%22content%5C%22%3A%5C%22%EC%97%90+%EB%8C%80%ED%95%9C+%EC%84%A4%EB%AA%85+%EC%A4%91+%EC%98%B3%EC%9D%80+%EA%B2%83%EC%9D%80%3F%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22LineBreak%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Box%5C%22%2C%5C%22elements%5C%22%3A%5B%7B%5C%22type%5C%22%3A%5C%22SingleChoice%5C%22%2C%5C%22choices%5C%22%3A%5B%7B%5C%22type%5C%22%3A%5C%22Blank%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Blank%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Blank%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Box%5C%22%2C%5C%22elements%5C%22%3A%5B%7B%5C%22type%5C%22%3A%5C%22Box%5C%22%2C%5C%22elements%5C%22%3A%5B%7B%5C%22type%5C%22%3A%5C%22Text%5C%22%2C%5C%22content%5C%22%3A%5C%22%EA%BC%AD%EC%A7%93%EC%A0%90%EC%9D%98+%EA%B0%9C%EC%88%98%EB%8A%94+%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Math%5C%22%2C%5C%22content%5C%22%3A%5C%226%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Text%5C%22%2C%5C%22content%5C%22%3A%5C%22+%EA%B0%9C%2C+%EB%AA%A8%EC%84%9C%EB%A6%AC%EC%9D%98+%EA%B0%9C%EC%88%98%EB%8A%94+%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Math%5C%22%2C%5C%22content%5C%22%3A%5C%229%5C%22%7D%2C%7B%5C%22type%5C%22%3A%5C%22Text%5C%22%2C%5C%22content%5C%22%3A%5C%22+%EA%B0%9C%EC%9D%B4%EB%8B%A4.%5C%22%7D%5D%7D%5D%7D%5D%2C%5C%22answer%5C%22%3A%5C%223%5C%22%7D%5D%7D%2C%7B%5C%22type%5C%22%3A%5C%22Box%5C%22%2C%5C%22elements%5C%22%3A%5B%7B%5C%22type%5C%22%3A%5C%22Box%5C%22%2C%5C%22elements%5C%22%3A%5B%5D%7D%5D%7D%2C%7B%5C%22type%5C%22%3A%5C%22Box%5C%22%2C%5C%22elements%5C%22%3A%5B%7B%5C%22type%5C%22%3A%5C%22Box%5C%22%2C%5C%22elements%5C%22%3A%5B%5D%7D%5D%7D%5D%7D%5D%22%2C%22lessonInfo%22%3A%7B%22compositeId%22%3A%22KNRLESS50393%22%2C%22curriculumId%22%3A14%2C%22curriculumType%22%3A%22SEMESTER%22%2C%22lessonId%22%3A57729%2C%22lessonType%22%3A%22LESSON%22%7D%2C%22parentId%22%3A-1%2C%22problemId%22%3A806387%2C%22time_left%22%3A-1%7D`),
+		},
 	}
 
 	for _, raw := range raws {
-		var msg string
-		var err error
-		body := string(raw)
-		if IsJSON(body) {
-			continue
-		}
-
-		body = "\"" + body + "\""
-		msg, err = strconv.Unquote(body)
-
-		if err != nil {
-			log.Fatal(err, " ", string(raw))
-		}
-
-		log.Println(msg)
+		value := urlEncode(string(raw.Data))
+		assert.Equal(t, raw.Expected, []byte(value))
 	}
-	//
-	//for _, raw := range raws {
-	//	body := "\"" + string(raw) + "\""
-	//	s, err := strconv.Unquote(body)
-	//	if err != nil {
-	//		log.Fatal(err)
-	//	}
-	//
-	//	log.Println(s)
-	//}
+
+}
+
+func TestElasticSearchResponseParser(t *testing.T) {
+	raw := []byte(`{"_scroll_id":"FGluY2x1ZGVfY29udGV4dF91dWlkDnF1ZXJ5VGhlbkZldGNoBRRLNUNIa24wQk1xaGpRdzBpU011XwAAAAAADcO5Fjg4LWNzb21rUWplZ0ZxSlJzR1d0akEUYkJLSGtuMEJCQzY3dnRGWVNJeS0AAAAAAA2UuxZsNktaVG1JNVI3T1JaMkljYVdRYnF3FEswQ0hrbjBCZE9YZjBUNDdTRzdBAAAAAAAOh7cWb1FZTWtUeDBSQm1XdnNzZ3FVazF6QRRiUktIa24wQkJDNjd2dEZZU0l5XwAAAAAADZS8Fmw2S1pUbUk1UjdPUloySWNhV1FicXcUYmhLSGtuMEJCQzY3dnRGWVNJeV8AAAAAAA2UvRZsNktaVG1JNVI3T1JaMkljYVdRYnF3","_shards":{"failed":0,"skipped":0,"successful":5,"total":5},"hits":{"hits":[{"_id":"zVeSbn0BBC67vtFYFLNL","_index":"cwl-raw-2021.11.30","_score":null,"_source":{"@id":"36533919381901327281967548187684929652865715309302317056","@log_group":"/ecs/krdky-unstable","@log_stream":"ecs/krdky-unstable/230a3ebcac4d491585810921897cdc8b","@message":"{\"logType\":\"formattedLog\",\"knowre-daekyo\":{\"serverLog\":{\"url\":\"/api/heartbeat\",\"method\":\"GET\",\"ip\":\"::ffff:10.11.157.64\",\"router\":\"10.11.43.226:37\",\"body\":\"{}\",\"userAgent\":\"ELB-HealthChecker/2.0\",\"cookie\":\"{\\\"cookie\\\":{}}\",\"session\":\"{\\\"_domain\\\":{\\\"domain\\\":\\\"daekyo-unstable.knowreapp.com\\\"},\\\"_secret\\\":\\\"knowre_dev\\\",\\\"_cookieKey\\\":\\\"connect.sid\\\",\\\"_tokenExpireTime\\\":5400,\\\"tick\\\":1}\",\"trace\":\"{\\\"elapsedTime\\\":{\\\"server-log-start\\\":{\\\"time\\\":[0,65631],\\\"end\\\":true,\\\"elapsed\\\":0.065631},\\\"jwtSessionOut\\\":{\\\"time\\\":[0,253426],\\\"end\\\":true,\\\"elapsed\\\":0.253426},\\\"responseOut\\\":{\\\"time\\\":[0,287935],\\\"end\\\":true,\\\"elapsed\\\":0.287935},\\\"totalElapsedTime\\\":1.438613,\\\"state\\\":\\\"normal\\\"}}\",\"performance\":1.438613,\"error\":null,\"result\":true,\"req\":null,\"session_id\":null,\"amazonTraceId\":\"NOT_LOGGING\",\"randomNumGeneratorSeed\":9992,\"parameters\":\"{\\\"query\\\":{},\\\"body\\\":{}}\"}}}","@owner":"468720534852","@timestamp":"2021-11-30T02:00:04.020Z","@version":"1","kafka.consumer_group":"logstash-cwl-raw","kafka.key":"%{[@metadata][kafka][key]}","kafka.offset":"53462865","kafka.partition":"0","kafka.timestamp":"1638237606878","kafka.topic":"formattedLog","knowre-daekyo":{"serverLog":{"amazonTraceId":"NOT_LOGGING","body":"{}","cookie":"{\"cookie\":{}}","error":null,"ip":"::ffff:10.11.157.64","method":"GET","parameters":"{\"query\":{},\"body\":{}}","performance":1.438613,"randomNumGeneratorSeed":9992,"req":null,"result":true,"router":"10.11.43.226:37","session":"{\"_domain\":{\"domain\":\"daekyo-unstable.knowreapp.com\"},\"_secret\":\"knowre_dev\",\"_cookieKey\":\"connect.sid\",\"_tokenExpireTime\":5400,\"tick\":1}","session_id":null,"trace":"{\"elapsedTime\":{\"server-log-start\":{\"time\":[0,65631],\"end\":true,\"elapsed\":0.065631},\"jwtSessionOut\":{\"time\":[0,253426],\"end\":true,\"elapsed\":0.253426},\"responseOut\":{\"time\":[0,287935],\"end\":true,\"elapsed\":0.287935},\"totalElapsedTime\":1.438613,\"state\":\"normal\"}}","url":"/api/heartbeat","userAgent":"ELB-HealthChecker/2.0"}},"logType":"formattedLog"},"_type":"_doc","sort":[1638237604020]},{"_id":"gc6Sbn0BMqhjQw0iTgrn","_index":"cwl-raw-2021.11.30","_score":null,"_source":{"@id":"36533919757847289838796793125842578715498057255978926080","@log_group":"/ecs/krdky-unstable","@log_stream":"ecs/krdky-unstable/230a3ebcac4d491585810921897cdc8b","@message":"{\"logType\":\"formattedLog\",\"knowre-daekyo\":{\"serverLog\":{\"url\":\"/api/heartbeat\",\"method\":\"GET\",\"ip\":\"::ffff:10.11.134.195\",\"router\":\"10.11.43.226:53\",\"body\":\"{}\",\"userAgent\":\"ELB-HealthChecker/2.0\",\"cookie\":\"{\\\"cookie\\\":{}}\",\"session\":\"{\\\"_domain\\\":{\\\"domain\\\":\\\"daekyo-unstable.knowreapp.com\\\"},\\\"_secret\\\":\\\"knowre_dev\\\",\\\"_cookieKey\\\":\\\"connect.sid\\\",\\\"_tokenExpireTime\\\":5400,\\\"tick\\\":1}\",\"trace\":\"{\\\"elapsedTime\\\":{\\\"server-log-start\\\":{\\\"time\\\":[0,75003],\\\"end\\\":true,\\\"elapsed\\\":0.075003},\\\"jwtSessionOut\\\":{\\\"time\\\":[0,317126],\\\"end\\\":true,\\\"elapsed\\\":0.317126},\\\"responseOut\\\":{\\\"time\\\":[0,305691],\\\"end\\\":true,\\\"elapsed\\\":0.305691},\\\"totalElapsedTime\\\":1.535158,\\\"state\\\":\\\"normal\\\"}}\",\"performance\":1.535158,\"error\":null,\"result\":true,\"req\":null,\"session_id\":null,\"amazonTraceId\":\"NOT_LOGGING\",\"randomNumGeneratorSeed\":1865,\"parameters\":\"{\\\"query\\\":{},\\\"body\\\":{}}\"}}}","@owner":"468720534852","@timestamp":"2021-11-30T02:00:20.878Z","@version":"1","kafka.consumer_group":"logstash-cwl-raw","kafka.key":"%{[@metadata][kafka][key]}","kafka.offset":"53462869","kafka.partition":"0","kafka.timestamp":"1638237621883","kafka.topic":"formattedLog","knowre-daekyo":{"serverLog":{"amazonTraceId":"NOT_LOGGING","body":"{}","cookie":"{\"cookie\":{}}","error":null,"ip":"::ffff:10.11.134.195","method":"GET","parameters":"{\"query\":{},\"body\":{}}","performance":1.535158,"randomNumGeneratorSeed":1865,"req":null,"result":true,"router":"10.11.43.226:53","session":"{\"_domain\":{\"domain\":\"daekyo-unstable.knowreapp.com\"},\"_secret\":\"knowre_dev\",\"_cookieKey\":\"connect.sid\",\"_tokenExpireTime\":5400,\"tick\":1}","session_id":null,"trace":"{\"elapsedTime\":{\"server-log-start\":{\"time\":[0,75003],\"end\":true,\"elapsed\":0.075003},\"jwtSessionOut\":{\"time\":[0,317126],\"end\":true,\"elapsed\":0.317126},\"responseOut\":{\"time\":[0,305691],\"end\":true,\"elapsed\":0.305691},\"totalElapsedTime\":1.535158,\"state\":\"normal\"}}","url":"/api/heartbeat","userAgent":"ELB-HealthChecker/2.0"}},"logType":"formattedLog"},"_type":"_doc","sort":[1638237620878]},{"_id":"nVeSbn0BBC67vtFYibRp","_index":"cwl-raw-2021.11.30","_score":null,"_source":{"@id":"36533920051391998887055385556006304316500141348797022208","@log_group":"/ecs/krdky-unstable","@log_stream":"ecs/krdky-unstable/230a3ebcac4d491585810921897cdc8b","@message":"{\"logType\":\"formattedLog\",\"knowre-daekyo\":{\"serverLog\":{\"url\":\"/api/heartbeat\",\"method\":\"GET\",\"ip\":\"::ffff:10.11.157.64\",\"router\":\"10.11.43.226:37\",\"body\":\"{}\",\"userAgent\":\"ELB-HealthChecker/2.0\",\"cookie\":\"{\\\"cookie\\\":{}}\",\"session\":\"{\\\"_domain\\\":{\\\"domain\\\":\\\"daekyo-unstable.knowreapp.com\\\"},\\\"_secret\\\":\\\"knowre_dev\\\",\\\"_cookieKey\\\":\\\"connect.sid\\\",\\\"_tokenExpireTime\\\":5400,\\\"tick\\\":1}\",\"trace\":\"{\\\"elapsedTime\\\":{\\\"server-log-start\\\":{\\\"time\\\":[0,64733],\\\"end\\\":true,\\\"elapsed\\\":0.064733},\\\"jwtSessionOut\\\":{\\\"time\\\":[0,252701],\\\"end\\\":true,\\\"elapsed\\\":0.252701},\\\"responseOut\\\":{\\\"time\\\":[0,283039],\\\"end\\\":true,\\\"elapsed\\\":0.283039},\\\"totalElapsedTime\\\":1.495475,\\\"state\\\":\\\"normal\\\"}}\",\"performance\":1.495475,\"error\":null,\"result\":true,\"req\":null,\"session_id\":null,\"amazonTraceId\":\"NOT_LOGGING\",\"randomNumGeneratorSeed\":880,\"parameters\":\"{\\\"query\\\":{},\\\"body\\\":{}}\"}}}","@owner":"468720534852","@timestamp":"2021-11-30T02:00:34.041Z","@version":"1","kafka.consumer_group":"logstash-cwl-raw","kafka.key":"%{[@metadata][kafka][key]}","kafka.offset":"53462875","kafka.partition":"0","kafka.timestamp":"1638237636860","kafka.topic":"formattedLog","knowre-daekyo":{"serverLog":{"amazonTraceId":"NOT_LOGGING","body":"{}","cookie":"{\"cookie\":{}}","error":null,"ip":"::ffff:10.11.157.64","method":"GET","parameters":"{\"query\":{},\"body\":{}}","performance":1.495475,"randomNumGeneratorSeed":880,"req":null,"result":true,"router":"10.11.43.226:37","session":"{\"_domain\":{\"domain\":\"daekyo-unstable.knowreapp.com\"},\"_secret\":\"knowre_dev\",\"_cookieKey\":\"connect.sid\",\"_tokenExpireTime\":5400,\"tick\":1}","session_id":null,"trace":"{\"elapsedTime\":{\"server-log-start\":{\"time\":[0,64733],\"end\":true,\"elapsed\":0.064733},\"jwtSessionOut\":{\"time\":[0,252701],\"end\":true,\"elapsed\":0.252701},\"responseOut\":{\"time\":[0,283039],\"end\":true,\"elapsed\":0.283039},\"totalElapsedTime\":1.495475,\"state\":\"normal\"}}","url":"/api/heartbeat","userAgent":"ELB-HealthChecker/2.0"}},"logType":"formattedLog"},"_type":"_doc","sort":[1638237634041]},{"_id":"G1eSbn0BBC67vtFYw7X3","_index":"cwl-raw-2021.11.30","_score":null,"_source":{"@id":"36533920392571099679375389016490663388797290079670239232","@log_group":"/ecs/krdky-unstable","@log_stream":"ecs/krdky-unstable/230a3ebcac4d491585810921897cdc8b","@message":"{\"logType\":\"formattedLog\",\"knowre-daekyo\":{\"serverLog\":{\"url\":\"/api/v3/b2c/diagnoses\",\"method\":\"GET\",\"ip\":\"1.214.219.122\",\"router\":\"daekyo-unstable.knowreapp.com:53\",\"body\":\"{}\",\"userAgent\":\"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36\",\"accessToken\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJiMmNfdXNlcl9pZCI6ODQsInVzZXJfaWQiOjExMzU0MCwiYWNjb3VudCI6ImIyY3Rlc3RfMzIxIiwiZXh0ZXJuYWxfYWNjb3VudCI6ImIyY3Rlc3RfMzIxIiwiaXNzdWVyIjoiZGFla3lvLXVuc3RhYmxlLmtub3dyZWFwcC5jb20iLCJpc3N1ZV9kYXRlIjoiMjAyMS0xMS0zMFQwMDo0OTo1Mi40NzNaIiwic2Vzc2lvbl9pZCI6IjExMzU0MFQ4MjMzMzkyNDczRHVuZGVmaW5lZCIsImlhdCI6MTYzODIzMzM5Mn0.QJ4yzbl-GP6ntb7caEpzttsMMfMIN6dEmFy41-bal8A\",\"token\":\"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfdG9rZW5FeHBpcmVUaW1lIjo1NDAwLCJjb25uZWN0ZWRBdCI6IjIwMjEtMTEtMzBUMDA6NTA6MDkuOTQ0WiIsInVzZXJJRCI6MTEzNTQwLCJ1c2VyTmFtZSI6ImFpbXMwMDg0IiwiZXh0ZXJuYWxBY2NvdW50IjpudWxsLCJjdXJyaWN1bHVtX2lkIjoxNywiY3VycmljdWx1bV90eXBlIjoiU0VNRVNURVIiLCJkaWZmaWN1bHR5IjoyNSwicGF5bWVudENoZWNrIjpmYWxzZSwidG9rZW5fYWNjb3VudCI6ImIyY3Rlc3RfMzIxIiwicHJvZHVjdFR5cGUiOiJNSUQiLCJzdGFtcCI6InNoYTEkNWMyN2RiMTgkMSQyZTkyNTgyYWRkM2E0ZDE5NzM1Y2NjNzczNDQ1ZGIxYjBlNTU2MjM2IiwiYXBpX3ZlcnNpb24iOiJ2MiIsInVzZXJUeXBlIjoiQjJDIiwiQjJDVXNlcklkIjo4NCwidGljayI6MSwiaWF0IjoxNjM4MjMzMzkyLCJleHAiOjE2MzgyMzg3OTJ9.OKNFB5I7qTQ-XtyTonHbu6SWgjTIXwd0oZw_-QozE8U\",\"cookie\":\"{\\\"cookie\\\":{}}\",\"session\":\"{\\\"_domain\\\":{\\\"domain\\\":\\\"daekyo-unstable.knowreapp.com\\\"},\\\"_secret\\\":\\\"knowre_dev\\\",\\\"_cookieKey\\\":\\\"connect.sid\\\",\\\"_tokenExpireTime\\\":5400,\\\"connectedAt\\\":\\\"2021-11-30T00:50:09.944Z\\\",\\\"userID\\\":113540,\\\"userName\\\":\\\"aims0084\\\",\\\"externalAccount\\\":null,\\\"curriculum_id\\\":17,\\\"curriculum_type\\\":\\\"SEMESTER\\\",\\\"difficulty\\\":25,\\\"paymentCheck\\\":false,\\\"token_account\\\":\\\"b2ctest_321\\\",\\\"productType\\\":\\\"MID\\\",\\\"stamp\\\":\\\"sha1$5c27db18$1$2e92582add3a4d19735ccc773445db1b0e556236\\\",\\\"api_version\\\":\\\"v2\\\",\\\"userType\\\":\\\"B2C\\\",\\\"B2CUserId\\\":84,\\\"tick\\\":1,\\\"iat\\\":1638233392,\\\"exp\\\":1638238792,\\\"_tokenHash\\\":\\\"d5f5c12c2f2aaa94f3f6f18e7b278cb6\\\"}\",\"trace\":\"{\\\"elapsedTime\\\":{\\\"server-log-start\\\":{\\\"time\\\":[0,55692],\\\"end\\\":true,\\\"elapsed\\\":0.055692},\\\"jwtSessionOut\\\":{\\\"time\\\":[0,52302],\\\"end\\\":true,\\\"elapsed\\\":0.052302},\\\"responseOut\\\":{\\\"time\\\":[0,253440],\\\"end\\\":true,\\\"elapsed\\\":0.25344},\\\"totalElapsedTime\\\":135.154961,\\\"state\\\":\\\"normal\\\"}}\",\"performance\":135.154961,\"error\":null,\"result\":true,\"req\":null,\"session_id\":\"113540T8233392473Dundefined\",\"amazonTraceId\":\"Root=1-61a585d1-7c3bf7e54d7631714e9007ca\",\"randomNumGeneratorSeed\":589,\"user_id\":113540,\"userType\":\"B2C\",\"parameters\":\"{\\\"query\\\":{},\\\"body\\\":{}}\"}}}","@owner":"468720534852","@timestamp":"2021-11-30T02:00:49.340Z","@version":"1","kafka.consumer_group":"logstash-cwl-raw","kafka.key":"%{[@metadata][kafka][key]}","kafka.offset":"53462878","kafka.partition":"0","kafka.timestamp":"1638237651842","kafka.topic":"formattedLog","knowre-daekyo":{"serverLog":{"accessToken":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJiMmNfdXNlcl9pZCI6ODQsInVzZXJfaWQiOjExMzU0MCwiYWNjb3VudCI6ImIyY3Rlc3RfMzIxIiwiZXh0ZXJuYWxfYWNjb3VudCI6ImIyY3Rlc3RfMzIxIiwiaXNzdWVyIjoiZGFla3lvLXVuc3RhYmxlLmtub3dyZWFwcC5jb20iLCJpc3N1ZV9kYXRlIjoiMjAyMS0xMS0zMFQwMDo0OTo1Mi40NzNaIiwic2Vzc2lvbl9pZCI6IjExMzU0MFQ4MjMzMzkyNDczRHVuZGVmaW5lZCIsImlhdCI6MTYzODIzMzM5Mn0.QJ4yzbl-GP6ntb7caEpzttsMMfMIN6dEmFy41-bal8A","amazonTraceId":"Root=1-61a585d1-7c3bf7e54d7631714e9007ca","body":"{}","cookie":"{\"cookie\":{}}","error":null,"ip":"1.214.219.122","method":"GET","parameters":"{\"query\":{},\"body\":{}}","performance":135.154961,"randomNumGeneratorSeed":589,"req":null,"result":true,"router":"daekyo-unstable.knowreapp.com:53","session":"{\"_domain\":{\"domain\":\"daekyo-unstable.knowreapp.com\"},\"_secret\":\"knowre_dev\",\"_cookieKey\":\"connect.sid\",\"_tokenExpireTime\":5400,\"connectedAt\":\"2021-11-30T00:50:09.944Z\",\"userID\":113540,\"userName\":\"aims0084\",\"externalAccount\":null,\"curriculum_id\":17,\"curriculum_type\":\"SEMESTER\",\"difficulty\":25,\"paymentCheck\":false,\"token_account\":\"b2ctest_321\",\"productType\":\"MID\",\"stamp\":\"sha1$5c27db18$1$2e92582add3a4d19735ccc773445db1b0e556236\",\"api_version\":\"v2\",\"userType\":\"B2C\",\"B2CUserId\":84,\"tick\":1,\"iat\":1638233392,\"exp\":1638238792,\"_tokenHash\":\"d5f5c12c2f2aaa94f3f6f18e7b278cb6\"}","session_id":"113540T8233392473Dundefined","token":"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfdG9rZW5FeHBpcmVUaW1lIjo1NDAwLCJjb25uZWN0ZWRBdCI6IjIwMjEtMTEtMzBUMDA6NTA6MDkuOTQ0WiIsInVzZXJJRCI6MTEzNTQwLCJ1c2VyTmFtZSI6ImFpbXMwMDg0IiwiZXh0ZXJuYWxBY2NvdW50IjpudWxsLCJjdXJyaWN1bHVtX2lkIjoxNywiY3VycmljdWx1bV90eXBlIjoiU0VNRVNURVIiLCJkaWZmaWN1bHR5IjoyNSwicGF5bWVudENoZWNrIjpmYWxzZSwidG9rZW5fYWNjb3VudCI6ImIyY3Rlc3RfMzIxIiwicHJvZHVjdFR5cGUiOiJNSUQiLCJzdGFtcCI6InNoYTEkNWMyN2RiMTgkMSQyZTkyNTgyYWRkM2E0ZDE5NzM1Y2NjNzczNDQ1ZGIxYjBlNTU2MjM2IiwiYXBpX3ZlcnNpb24iOiJ2MiIsInVzZXJUeXBlIjoiQjJDIiwiQjJDVXNlcklkIjo4NCwidGljayI6MSwiaWF0IjoxNjM4MjMzMzkyLCJleHAiOjE2MzgyMzg3OTJ9.OKNFB5I7qTQ-XtyTonHbu6SWgjTIXwd0oZw_-QozE8U","trace":"{\"elapsedTime\":{\"server-log-start\":{\"time\":[0,55692],\"end\":true,\"elapsed\":0.055692},\"jwtSessionOut\":{\"time\":[0,52302],\"end\":true,\"elapsed\":0.052302},\"responseOut\":{\"time\":[0,253440],\"end\":true,\"elapsed\":0.25344},\"totalElapsedTime\":135.154961,\"state\":\"normal\"}}","url":"/api/v3/b2c/diagnoses","userAgent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36","userType":"B2C","user_id":113540}},"logType":"formattedLog"},"_type":"_doc","sort":[1638237649340]},{"_id":"HFeSbn0BBC67vtFYw7X3","_index":"cwl-raw-2021.11.30","_score":null,"_source":{"@id":"36533920427048051756303732393304883838311656967915962369","@log_group":"/ecs/krdky-unstable","@log_stream":"ecs/krdky-unstable/230a3ebcac4d491585810921897cdc8b","@message":"{\"logType\":\"formattedLog\",\"knowre-daekyo\":{\"serverLog\":{\"url\":\"/api/heartbeat\",\"method\":\"GET\",\"ip\":\"::ffff:10.11.134.195\",\"router\":\"10.11.43.226:37\",\"body\":\"{}\",\"userAgent\":\"ELB-HealthChecker/2.0\",\"cookie\":\"{\\\"cookie\\\":{}}\",\"session\":\"{\\\"_domain\\\":{\\\"domain\\\":\\\"daekyo-unstable.knowreapp.com\\\"},\\\"_secret\\\":\\\"knowre_dev\\\",\\\"_cookieKey\\\":\\\"connect.sid\\\",\\\"_tokenExpireTime\\\":5400,\\\"tick\\\":1}\",\"trace\":\"{\\\"elapsedTime\\\":{\\\"server-log-start\\\":{\\\"time\\\":[0,116078],\\\"end\\\":true,\\\"elapsed\\\":0.116078},\\\"jwtSessionOut\\\":{\\\"time\\\":[0,259765],\\\"end\\\":true,\\\"elapsed\\\":0.259765},\\\"responseOut\\\":{\\\"time\\\":[0,283993],\\\"end\\\":true,\\\"elapsed\\\":0.283993},\\\"totalElapsedTime\\\":1.430878,\\\"state\\\":\\\"normal\\\"}}\",\"performance\":1.430878,\"error\":null,\"result\":true,\"req\":null,\"session_id\":null,\"amazonTraceId\":\"NOT_LOGGING\",\"randomNumGeneratorSeed\":7007,\"parameters\":\"{\\\"query\\\":{},\\\"body\\\":{}}\"}}}","@owner":"468720534852","@timestamp":"2021-11-30T02:00:50.886Z","@version":"1","kafka.consumer_group":"logstash-cwl-raw","kafka.key":"%{[@metadata][kafka][key]}","kafka.offset":"53462879","kafka.partition":"0","kafka.timestamp":"1638237651842","kafka.topic":"formattedLog","knowre-daekyo":{"serverLog":{"amazonTraceId":"NOT_LOGGING","body":"{}","cookie":"{\"cookie\":{}}","error":null,"ip":"::ffff:10.11.134.195","method":"GET","parameters":"{\"query\":{},\"body\":{}}","performance":1.430878,"randomNumGeneratorSeed":7007,"req":null,"result":true,"router":"10.11.43.226:37","session":"{\"_domain\":{\"domain\":\"daekyo-unstable.knowreapp.com\"},\"_secret\":\"knowre_dev\",\"_cookieKey\":\"connect.sid\",\"_tokenExpireTime\":5400,\"tick\":1}","session_id":null,"trace":"{\"elapsedTime\":{\"server-log-start\":{\"time\":[0,116078],\"end\":true,\"elapsed\":0.116078},\"jwtSessionOut\":{\"time\":[0,259765],\"end\":true,\"elapsed\":0.259765},\"responseOut\":{\"time\":[0,283993],\"end\":true,\"elapsed\":0.283993},\"totalElapsedTime\":1.430878,\"state\":\"normal\"}}","url":"/api/heartbeat","userAgent":"ELB-HealthChecker/2.0"}},"logType":"formattedLog"},"_type":"_doc","sort":[1638237650886]}],"max_score":null,"total":{"relation":"eq","value":5}},"timed_out":false,"took":45}`)
+	log.Println(string(raw))
+
+	var scrollID string
+	var err error
+	var total, documents int64
+	var executionTime float64
+	scrollID, err = jsonparser.GetString(raw, "_scroll_id")
+	checkErr(err)
+	total, err = jsonparser.GetInt(raw, "hits", "total", "value")
+	checkErr(err)
+	executionTime, err = jsonparser.GetFloat(raw, "took")
+	checkErr(err)
+
+	log.Println(scrollID[:5], " ", total, " ", executionTime)
+
+	jsonparser.ArrayEach(raw, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
+		var ems *ElasticsearchMessage
+		//log.Println(string(value))
+		doc, uErr := UnmarshalElasticsearchDocument(value)
+		checkErr(uErr)
+		ems, err = NewElasticsearchMessage(doc)
+		checkErr(err)
+		log.Println(doc)
+		_ = ems
+		documents++
+	}, "hits", "hits")
 
 }
