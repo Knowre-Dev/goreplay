@@ -240,7 +240,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 	var executionTime int64
 
 	for i := 0; i < timeRange; i++ {
-		//time.Sleep(time.Second * 1)
+		time.Sleep(time.Second * 1)
 		var subDocuments = 0
 		batchNum = 0
 		var buf bytes.Buffer
@@ -305,8 +305,9 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			subDocuments++
 		}, "hits", "hits")
 
-		scrollDocuments := 0
 		for {
+			scrollSubDocuments := 0
+
 			batchNum++
 			scrollRes, scrollErr := esClient.Scroll(esClient.Scroll.WithScrollID(scrollID), esClient.Scroll.WithScroll(time.Minute))
 			if scrollErr != nil {
@@ -321,9 +322,8 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			checkErr(err)
 
 			jsonparser.ArrayEach(scrollJSON, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
-				if subDocuments == 0 {
+				if scrollSubDocuments == 0 {
 					log.Printf("1-Batch %d, ScrollID %s  message_len %d\n", batchNum, scrollID[:10], len(messages))
-
 				}
 				var ems *ElasticsearchMessage
 				doc, uErr := UnmarshalElasticsearchDocument(value)
@@ -333,10 +333,12 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 
 				//limiter(ems, &lastTime)
 				messages <- ems
-				scrollDocuments++
+				scrollSubDocuments++
+
 			}, "hits", "hits")
 
-			if scrollDocuments < 1 {
+			subDocuments += scrollSubDocuments
+			if scrollSubDocuments < 1 {
 				log.Println("Finished scrolling. SubDocuments ", subDocuments)
 				scrollRes.Body.Close()
 				break
@@ -344,7 +346,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			log.Println(strings.Repeat("-", 80))
 			scrollRes.Body.Close()
 		}
-		documents = documents + subDocuments + scrollDocuments
+		documents = documents + subDocuments
 
 		res.Body.Close()
 
@@ -383,7 +385,7 @@ func makeQueryString(fromDate time.Time, match string, i int) map[string]interfa
 					//TODO ID별로 요청을 필터링 하기 위한 부분
 					//map[string]interface{}{
 					//	"match_phrase": map[string]interface{}{
-					//		"knowre-daekyo.serverLog.user_id": 112667,
+					//		"knowre-daekyo.serverLog.user_id": 698697,
 					//	},
 					//},
 				},
@@ -535,7 +537,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 func (m ElasticsearchMessage) Dump() ([]byte, error) {
 	var b bytes.Buffer
 
-	b.WriteString(fmt.Sprintf("%s %s %s 0 %d\n", m.ReqType, m.ReqID, m.ReqTs, m.UserID))
+	b.WriteString(fmt.Sprintf("%s %s %s %d\n", m.ReqType, m.ReqID, m.ReqTs, m.UserID))
 	b.WriteString(fmt.Sprintf("%s %s HTTP/1.1", m.ReqMethod, m.ReqURL))
 	b.Write(proto.CRLF)
 	for key, value := range m.ReqHeaders {
