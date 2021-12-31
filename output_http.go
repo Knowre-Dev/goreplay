@@ -110,7 +110,9 @@ func NewHTTPOutput(address string, config *HTTPOutputConfig) PluginReadWriter {
 		o.queueStats = NewGorStat("output_http", o.config.StatsMs)
 	}
 
-	//set workers min, max default 200
+	//modify jungyun.kim set workers min, max default 200
+	//고루틴을 200개로 고정시키고 각 고루틴마다 고유한 유저처럼 만들기 위함
+	//요청 A,B,C 를 순차적으로 고루틴으로 처리하기 위해서는 순차적으로 행해지는 일을 하나의 고루틴에게 주는 수밖에 없음
 	config.WorkersMax = 200
 	config.WorkersMin = config.WorkersMax
 
@@ -153,9 +155,12 @@ func (o *HTTPOutput) workerMaster() {
 		case <-o.stop:
 			return
 		case msg := <-o.queue:
-			meta := bytes.Split(msg.Meta, []byte(" "))
-			if len(meta) >= 5 && !bytes.Equal(meta[4], []byte("0")) {
-				h.Write(meta[4])
+			meta := payloadMeta(msg.Meta)
+			userID := 3
+			if len(meta) > 3 {
+				h.Write(meta[userID])
+				gorutineId := h.Sum64() % uint64(o.activeWorkers)
+				log.Printf("Gor (%d)      %s\n", gorutineId, string(meta[1]))
 				o.channels[h.Sum64()%uint64(o.activeWorkers)] <- msg
 				h.Reset()
 			} else {
@@ -257,6 +262,8 @@ func (o *HTTPOutput) sendRequest(client *HTTPClient, msg *Message) {
 	if o.config.TrackResponses {
 		o.responses <- &response{resp, uuid, start.UnixNano(), stop.UnixNano() - start.UnixNano()}
 	}
+
+	//TODO 여기에 락을 해제하는 코드를 넣으면 됨
 
 	if o.elasticSearch != nil {
 		o.elasticSearch.ResponseAnalyze(msg.Data, resp, start, stop)

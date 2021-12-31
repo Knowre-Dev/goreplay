@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -132,9 +131,10 @@ func CopyMulty(src PluginReader, writers ...PluginWriter) error {
 			}
 
 			if Settings.SplitOutput {
-				if Settings.HashSessions && len(meta) >= 5 && !bytes.Equal(meta[4], []byte("0")) {
+				if Settings.HashSessions && len(meta) >= 4 {
 					h := fnv.New64a()
-					h.Write(meta[4])
+					userID := 3
+					h.Write(meta[userID])
 
 					wIndex = int(h.Sum64()) % len(writers)
 					if _, err := writers[wIndex].PluginWrite(msg); err != nil {
