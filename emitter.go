@@ -132,11 +132,11 @@ func CopyMulty(src PluginReader, writers ...PluginWriter) error {
 
 			if Settings.SplitOutput {
 				if Settings.HashSessions && len(meta) >= 4 {
-					h := fnv.New64a()
+					h := fnv.New32a()
 					userID := 3
 					h.Write(meta[userID])
 
-					wIndex = int(h.Sum64()) % len(writers)
+					wIndex = int(h.Sum32()) % len(writers)
 					if _, err := writers[wIndex].PluginWrite(msg); err != nil {
 						return err
 					}
