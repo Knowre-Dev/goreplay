@@ -159,8 +159,9 @@ func (o *HTTPOutput) workerMaster() {
 			userID := 3
 			if len(meta) > 3 {
 				h.Write(meta[userID])
-				gorutineId := h.Sum64() % uint64(o.activeWorkers)
-				log.Printf("Gor (%d)      %s\n", gorutineId, string(meta[1]))
+				//jungyun.kim Debug
+				//gorutineId := h.Sum64() % uint64(o.activeWorkers)
+				//log.Printf("Gor (%d)      %s\n", gorutineId, string(meta[1]))
 				o.channels[h.Sum64()%uint64(o.activeWorkers)] <- msg
 				h.Reset()
 			} else {
@@ -262,8 +263,6 @@ func (o *HTTPOutput) sendRequest(client *HTTPClient, msg *Message) {
 	if o.config.TrackResponses {
 		o.responses <- &response{resp, uuid, start.UnixNano(), stop.UnixNano() - start.UnixNano()}
 	}
-
-	//TODO 여기에 락을 해제하는 코드를 넣으면 됨
 
 	if o.elasticSearch != nil {
 		o.elasticSearch.ResponseAnalyze(msg.Data, resp, start, stop)
