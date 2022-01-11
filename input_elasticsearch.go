@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/buger/goreplay/knowre"
 	"github.com/buger/goreplay/proto"
 	"github.com/buger/jsonparser"
 	elasticsearch7 "github.com/elastic/go-elasticsearch/v7"
@@ -138,6 +139,7 @@ type InputElasticSearchConfig struct {
 	ToDate    time.Time   //종료시간
 	Includes  MultiOption //들어가 있을 컬럼
 	Match     string      // match_phrase이 해당
+	UserID    int         //userid
 	Transport *http.Transport
 }
 
@@ -236,18 +238,17 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 	var batchNum = 0
 	var documents = 0
 	var lastTime int64 = -1
+	_ = lastTime
 	var resultJSON, scrollJSON []byte
 	var executionTime int64
 
 	for i := 0; i < timeRange; i++ {
-		time.Sleep(time.Second * 1)
 		var subDocuments = 0
 		batchNum = 0
 		var buf bytes.Buffer
-		query := makeQueryString(c.FromDate, c.Match, i)
 
-		dslQuery, _ := json.Marshal(query)
-		log.Println(string(dslQuery))
+		dslQuery, query, err := knowre.MakeQuery(c.FromDate, c.Match, c.UserID, i)
+		log.Println(dslQuery)
 
 		if err = json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Fatalf("Error encoding query : %s", err)
@@ -331,7 +332,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 				ems, err = NewElasticsearchMessage(doc)
 				checkErr(err)
 
-				//limiter(ems, &lastTime)
+				limiter(ems, &lastTime)
 				messages <- ems
 				scrollSubDocuments++
 
@@ -355,55 +356,6 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 	log.Println("Total : ", documents)
 }
 
-func makeQueryString(fromDate time.Time, match string, i int) map[string]interface{} {
-	const layout = "2006-01-02T15:04:05.000Z"
-
-	gte := fromDate.Add(time.Duration(i) * time.Minute)
-	lt := gte.Add(time.Duration(59)*time.Second + 999*time.Millisecond)
-	log.Println(gte, "  ", lt)
-
-	query := map[string]interface{}{
-		"sort": []interface{}{
-			map[string]interface{}{
-				"@timestamp": "asc",
-			},
-		},
-		"query": map[string]interface{}{
-
-			"bool": map[string]interface{}{
-				"must": []interface{}{
-					map[string]interface{}{
-						"match_phrase": map[string]interface{}{
-							"@log_group": match,
-						},
-					},
-					map[string]interface{}{
-						"match_phrase": map[string]interface{}{
-							"logType": "formattedLog",
-						},
-					},
-					//TODO ID별로 요청을 필터링 하기 위한 부분
-					//map[string]interface{}{
-					//	"match_phrase": map[string]interface{}{
-					//		"knowre-daekyo.serverLog.user_id": 698697,
-					//	},
-					//},
-				},
-				"filter": map[string]interface{}{
-					"range": map[string]interface{}{
-						"@timestamp": map[string]interface{}{
-							"time_zone": "+09:00",
-							"gte":       gte.Format(layout),
-							"lt":        lt.Format(layout),
-						},
-					},
-				},
-			},
-		},
-	}
-	return query
-}
-
 func limiter(ems *ElasticsearchMessage, lastTime *int64) {
 	timestamp, _ := strconv.ParseInt(ems.ReqTs, 10, 64)
 	if *lastTime != -1 {
@@ -416,7 +368,7 @@ func limiter(ems *ElasticsearchMessage, lastTime *int64) {
 		//	diff = int64(float64(diff) / i.speedFactor)
 		//}
 
-		//time.Sleep(time.Duration(diff))
+		time.Sleep(time.Duration(diff))
 	} else {
 		*lastTime = timestamp
 	}
@@ -461,7 +413,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 	serverLog := doc.Source.KnowreDaekyo.ServerLog
 	timestamp := doc.Source.Timestamp
 	requestID := doc.ID
-	url := serverLog.URL
+	serverURL := serverLog.URL
 	host := strings.Split(serverLog.Router, ":")[0]
 	method := serverLog.Method
 	body := urlEncode(serverLog.Body)
@@ -520,7 +472,7 @@ func NewElasticsearchMessage(doc ElasticsearchDocument) (*ElasticsearchMessage, 
 		return nil, terr
 	}
 	ems := &ElasticsearchMessage{
-		ReqURL:     url,
+		ReqURL:     serverURL,
 		ReqType:    "1",
 		ReqID:      requestID,
 		ReqTs:      fmt.Sprintf("%d", logTimestamp.UnixNano()),
