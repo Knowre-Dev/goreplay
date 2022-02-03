@@ -141,7 +141,7 @@ type InputElasticSearchConfig struct {
 	Match     string      // match_phrase이 해당
 	UserID    int         //userid
 	Duration  int         // 설정한 시간간격만큼 조회한다. default는 1이며 1분을 뜻한다.
-	Sleep     bool        //시간간격이 필요할때 true 로 설정하여 사용
+	Delay     bool        //시간간격이 필요할때 true 로 설정하여 사용
 	Transport *http.Transport
 }
 
@@ -302,7 +302,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			ems, err = NewElasticsearchMessage(doc)
 			checkErr(err)
 
-			if c.Sleep {
+			if c.Delay {
 				limiter(ems, &lastTime)
 			}
 			messages <- ems
@@ -336,7 +336,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 				ems, err = NewElasticsearchMessage(doc)
 				checkErr(err)
 
-				if c.Sleep {
+				if c.Delay {
 					limiter(ems, &lastTime)
 				}
 				messages <- ems
