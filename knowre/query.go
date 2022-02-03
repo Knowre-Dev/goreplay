@@ -51,18 +51,20 @@ type MatchPhrase struct {
 	LogGroup                    *string `json:"@log_group,omitempty"`
 	LogType                     *string `json:"logType,omitempty"`
 	KnowreDaekyoServerLogUserID *int64  `json:"knowre-daekyo.serverLog.user_id,omitempty"`
+	KnowreDaekyoServerLogResult *bool   `json:"knowre-daekyo.serverLog.result,omitempty"`
 }
 
 type Sort struct {
 	Timestamp string `json:"@timestamp"`
 }
 
-func MakeQuery(fromDate time.Time, match string, userID int, i int) (string, *ESQuery, error) {
+func MakeQuery(fromDate time.Time, match string, userID int, i int, duration int) (string, *ESQuery, error) {
 	const layout = "2006-01-02T15:04:05.000Z"
+	gte := fromDate.Add(time.Duration(i*duration) * time.Minute)
+	lt := gte.Add(time.Duration(duration)*time.Minute - 1*time.Millisecond)
 
-	gte := fromDate.Add(time.Duration(i) * time.Minute)
-	lt := gte.Add(time.Duration(59)*time.Second + 999*time.Millisecond)
 	logType := "formattedLog"
+	logResult := true
 
 	must := []Must{
 		{MatchPhrase{
@@ -70,6 +72,9 @@ func MakeQuery(fromDate time.Time, match string, userID int, i int) (string, *ES
 		}},
 		{MatchPhrase{
 			LogType: &logType,
+		}},
+		{MatchPhrase{
+			KnowreDaekyoServerLogResult: &logResult,
 		}},
 	}
 

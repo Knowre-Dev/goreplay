@@ -140,6 +140,8 @@ type InputElasticSearchConfig struct {
 	Includes  MultiOption //들어가 있을 컬럼
 	Match     string      // match_phrase이 해당
 	UserID    int         //userid
+	Duration  int         // 설정한 시간간격만큼 조회한다. default는 1이며 1분을 뜻한다.
+	Sleep     bool        //시간간격이 필요할때 true 로 설정하여 사용
 	Transport *http.Transport
 }
 
@@ -148,7 +150,7 @@ func (c InputElasticSearchConfig) Range() int {
 	//ToDate - FromDate 를 int로 나타내준다.
 	diff := c.ToDate.Sub(c.FromDate)
 	if diff > 0 {
-		return int(diff / time.Minute)
+		return int(diff / time.Minute / time.Duration(c.Duration))
 	}
 	return 0
 }
@@ -247,7 +249,7 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 		batchNum = 0
 		var buf bytes.Buffer
 
-		dslQuery, query, err := knowre.MakeQuery(c.FromDate, c.Match, c.UserID, i)
+		dslQuery, query, err := knowre.MakeQuery(c.FromDate, c.Match, c.UserID, i, c.Duration)
 		log.Println(dslQuery)
 
 		if err = json.NewEncoder(&buf).Encode(query); err != nil {
@@ -300,7 +302,9 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 			ems, err = NewElasticsearchMessage(doc)
 			checkErr(err)
 
-			limiter(ems, &lastTime)
+			if c.Sleep {
+				limiter(ems, &lastTime)
+			}
 			messages <- ems
 
 			subDocuments++
@@ -332,7 +336,9 @@ func es(c *InputElasticSearchConfig, messages chan *ElasticsearchMessage) {
 				ems, err = NewElasticsearchMessage(doc)
 				checkErr(err)
 
-				limiter(ems, &lastTime)
+				if c.Sleep {
+					limiter(ems, &lastTime)
+				}
 				messages <- ems
 				scrollSubDocuments++
 

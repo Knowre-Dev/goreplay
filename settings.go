@@ -220,6 +220,8 @@ func init() {
 	flag.StringVar(&Settings.InputElasticSearchConfig.Match, "input-elasticsearch-match", "", "Applies to the @log_group field.")
 	flag.BoolVar(&Settings.HashSessions, "hash-sessions", false, "ELB 의 UserID를 기반으로 하여 worker들에게 일을 분배함, Split-Output 옵션 활성화 필요")
 	flag.IntVar(&Settings.InputElasticSearchConfig.UserID, "input-elasticsearch-user-id", -1, "엘라스틱서치에서 검색할 UserID")
+	flag.IntVar(&Settings.InputElasticSearchConfig.Duration, "input-elasticsearch-duration", 1, "엘라스틱서치 질의쿼리의 간격, 10으로 설정할 경우 설정된 시간에서 10분 간격으로 조회")
+	flag.BoolVar(&Settings.InputElasticSearchConfig.Sleep, "input-elasticsearch-sleep", true, "sleep 사용여부")
 
 	// default values, using for tests
 	Settings.OutputFileConfig.SizeLimit = 33554432
@@ -237,6 +239,10 @@ func checkSettings() {
 	}
 	if Settings.CopyBufferSize < 1 {
 		Settings.CopyBufferSize.Set("5mb")
+	}
+
+	if Settings.InputElasticSearchConfig.Duration < 0 {
+		Settings.InputElasticSearchConfig.Duration = 1
 	}
 
 	layout := "2006-01-02T15:04"
